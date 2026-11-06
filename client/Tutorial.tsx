@@ -1,9 +1,9 @@
 // Guided tutorial: scripted positions played locally with the shared move rules, no server involved.
 import { useState } from 'react'
 import { call } from './net.ts'
-import { PieceIcon, glyph } from './Game.tsx'
-import type { Skins } from './Game.tsx'
-import { canMove, destinations, sqName, KINDS, LETTER, NAMES } from '../shared/rules.ts'
+import { Board, PieceIcon } from './Board.tsx'
+import type { Skins } from './Board.tsx'
+import { canMove, destinations, KINDS, NAMES } from '../shared/rules.ts'
 import type { Color, Kind, Sq } from '../shared/rules.ts'
 
 type TP = { id: string; owner: Color; kind: Kind; x: number; y: number; moved?: boolean; claim?: Kind }
@@ -180,25 +180,10 @@ export function Tutorial({ skins, loggedIn }: { skins: Skins; loggedIn: boolean 
     <main className="game tutorial">
       <div className="board-col">
         {step.contest !== undefined && <div className="bar"><div className="who"><b>Adversaire</b></div><div className="lives">❤ {lives.b}</div></div>}
-        <div className={`board board-${skins.board}`}>
-          {[7, 6, 5, 4, 3, 2, 1, 0].map((y) =>
-            [0, 1, 2, 3, 4, 5, 6, 7].map((x) => {
-              const p = pieces.find((q) => q.x === x && q.y === y)
-              const isDest = dests.some((d) => d.x === x && d.y === y)
-              const isLast = last?.some((s) => s.x === x && s.y === y)
-              const cls = ['sq', (x + y) % 2 ? 'light' : 'dark', isLast && 'last', selected === p && p && 'sel', isDest && (p ? 'dest cap' : 'dest')].filter(Boolean).join(' ')
-              return (
-                <button key={`${x}${y}`} className={cls} onClick={() => click(x, y)} aria-label={sqName({ x, y })}>
-                  {x === 0 && <span className="rank">{y + 1}</span>}
-                  {y === 0 && <span className="file">{F[x]}</span>}
-                  {p?.owner === 'w' && <PieceIcon kind={p.kind} owner="w" skin={skins.pieces} />}
-                  {p?.owner === 'w' && p.claim && <span className="claim">{LETTER[p.claim]}</span>}
-                  {p?.owner === 'b' && <span className={`token b ${marks[p.id] ? 'marked' : ''}`}>{marks[p.id] ? glyph(marks[p.id], skins.pieces) : '?'}</span>}
-                </button>
-              )
-            }),
-          )}
-        </div>
+        <Board
+          me="w" skins={skins} onSquare={click} sel={selected} dests={dests} last={last}
+          pieces={pieces.map((p) => ({ ...p, kind: p.owner === 'w' ? p.kind : undefined, mark: marks[p.id] }))}
+        />
         {step.contest !== undefined && <div className="bar"><div className="who"><b>Toi</b></div><div className="lives">❤ {lives.w}</div></div>}
       </div>
 

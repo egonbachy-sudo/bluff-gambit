@@ -83,6 +83,23 @@ export function setupError(c: Color, p: unknown): string | null {
   return null
 }
 
+/**
+ * A saved arrangement: 16 letters, back row then front row, each read from the player's own left.
+ * Mirroring for black keeps the bishop-colour rule valid for both sides.
+ */
+export const DEFAULT_LAYOUT = 'RNBQKBNRPPPPPPPP'
+export function layoutPlacement(c: Color, layout: string): Placement {
+  const [back, front] = homeRows(c)
+  return [...layout].map((kind, i) => ({ x: c === 'w' ? i % 8 : 7 - (i % 8), y: i < 8 ? back : front, kind: kind as Kind }))
+}
+export function placementLayout(c: Color, p: Placement): string {
+  const [back, front] = homeRows(c)
+  const at = (col: number, y: number) => p.find((e) => e.y === y && e.x === (c === 'w' ? col : 7 - col))?.kind ?? '?'
+  return [back, front].map((y) => [0, 1, 2, 3, 4, 5, 6, 7].map((col) => at(col, y)).join('')).join('')
+}
+export const layoutError = (layout: unknown) =>
+  typeof layout === 'string' && layout.length === 16 ? setupError('w', layoutPlacement('w', layout)) : 'Arrangement invalide'
+
 export const levelOf = (xp: number) => Math.floor(Math.sqrt(xp / 100)) + 1
 export const TIME_CONTROLS = [3, 5, 10, 20]
 export const CHALLENGE_SECONDS = 10

@@ -7,7 +7,7 @@ import { all, get, run } from './db.ts'
 import type { Row } from './db.ts'
 import * as G from './game.ts'
 import * as Bot from './bot.ts'
-import { classicSetup, opp, randomSetup, levelOf, CHALLENGE_SECONDS, DEFAULT_UNLOCKS, EMOTES, QUESTS, TIME_CONTROLS } from '../shared/rules.ts'
+import { layoutError, layoutPlacement, opp, randomSetup, levelOf, DEFAULT_LAYOUT, CHALLENGE_SECONDS, DEFAULT_UNLOCKS, EMOTES, QUESTS, TIME_CONTROLS } from '../shared/rules.ts'
 import type { Color } from '../shared/rules.ts'
 
 const PORT = Number(process.env.PORT ?? 3000)
@@ -62,9 +62,9 @@ async function stats(id: number) {
 }
 const unlockedOf = (st: Row) => [...DEFAULT_UNLOCKS, ...QUESTS.filter((q) => st[q.stat] >= q.goal).map((q) => q.reward)]
 async function profile(id: number) {
-  const u = await get('SELECT id, name, email, elo, piece_skin, board_skin FROM users WHERE id = ?', id)
+  const u = await get('SELECT id, name, email, elo, piece_skin, board_skin, layout FROM users WHERE id = ?', id)
   const st = await stats(id)
-  return { ...u, stats: st, level: levelOf(st.xp), unlocked: unlockedOf(st), inGame: roomOf.has(id) }
+  return { ...u, layout: u?.layout ?? DEFAULT_LAYOUT, stats: st, level: levelOf(st.xp), unlocked: unlockedOf(st), inGame: roomOf.has(id) }
 }
 // The training bot is a regular user row whose hash can never match a password.
 const BOT_EMAIL = 'bot@bluff.local'
@@ -76,6 +76,7 @@ const str = (v: unknown) => (typeof v === 'string' ? v.trim() : '')
 type Room = {
   players: Record<Color, number>; names: Record<Color, string>; elo: Record<Color, number>
   ranked: boolean; minutes: number; g: G.Game; clock: Record<Color, number>; since: number
+  layouts: Record<Color, string>
   timer?: NodeJS.Timeout; windowEnd?: number; setupEnd: number; eloDelta?: Record<Color, number>; done?: boolean
   bot?: Color; mem?: Bot.Mem; botTimer?: NodeJS.Timeout
 }
@@ -96,10 +97,11 @@ async function startRoom(a: number, b: number, minutes: number, ranked: boolean)
   leaveQueues(b)
   starting.add(a).add(b)
   const [w, bl] = Math.random() < 0.5 ? [a, b] : [b, a]
-  const user = (id: number) => get('SELECT name, elo FROM users WHERE id = ?', id) as Promise<Row>
+  const user = (id: number) => get('SELECT name, elo, layout FROM users WHERE id = ?', id) as Promise<Row>
   const [uw, ub] = await Promise.all([user(w), user(bl)]).finally(() => { starting.delete(a); starting.delete(b) })
   const room: Room = {
     players: { w, b: bl }, names: { w: uw.name, b: ub.name }, elo: { w: uw.elo, b: ub.elo },
+    layouts: { w: uw.layout ?? DEFAULT_LAYOUT, b: ub.layout ?? DEFAULT_LAYOUT },
     ranked, minutes, g: G.newGame(), clock: { w: minutes * 60_000, b: minutes * 60_000 },
     since: Date.now(), setupEnd: Date.now() + SETUP_MS,
   }
@@ -126,7 +128,7 @@ function schedule(r: Room) {
   if (g.phase === 'over') return finish(r)
   if (g.phase === 'setup') {
     r.timer = setTimeout(() => {
-      for (const c of ['w', 'b'] as Color[]) if (!g.players[c].ready) G.setup(g, c, classicSetup(c))
+      for (const c of ['w', 'b'] as Color[]) if (!g.players[c].ready) G.setup(g, c, layoutPlacement(c, r.layouts[c]))
       after(r)
     }, r.setupEnd - now)
     return
@@ -305,6 +307,13 @@ io.on('connection', (socket) => {
     const type = d.type === 'board' ? 'board' : 'pieces', skin = str(d.skin)
     if (!unlockedOf(await stats(id)).includes(`${type}:${skin}`)) throw new Error('Skin pas encore débloqué')
     await run(`UPDATE users SET ${type === 'board' ? 'board_skin' : 'piece_skin'} = ? WHERE id = ?`, skin, id)
+    return profile(id)
+  })
+
+  on('layout', async (d, id) => {
+    const err = layoutError(d.layout)
+    if (err) throw new Error(err)
+    await run('UPDATE users SET layout = ? WHERE id = ?', d.layout, id)
     return profile(id)
   })
 

@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { canMove, classicSetup, randomSetup, setupError } from '../shared/rules.ts'
+import { canMove, classicSetup, layoutError, layoutPlacement, placementLayout, randomSetup, setupError, DEFAULT_LAYOUT } from '../shared/rules.ts'
 import type { Kind, Color } from '../shared/rules.ts'
 import * as G from './game.ts'
 
@@ -142,4 +142,16 @@ test('view never leaks enemy kinds before the end', () => {
 test('elo is zero-sum and favours the underdog', () => {
   assert.equal(G.eloDelta(1200, 1200, 1), 16)
   assert.ok(G.eloDelta(1000, 1400, 1) > 16)
+})
+
+test('saved layouts round-trip and stay valid for both colours', () => {
+  for (let i = 0; i < 20; i++) {
+    const layout = placementLayout('w', randomSetup('w'))
+    assert.equal(layoutError(layout), null)
+    assert.equal(setupError('b', layoutPlacement('b', layout)), null)
+    assert.equal(placementLayout('b', layoutPlacement('b', layout)), layout)
+  }
+  assert.equal(placementLayout('w', classicSetup('w')), DEFAULT_LAYOUT)
+  assert.ok(layoutError('RNBQKBNRPPPPPPP'))
+  assert.ok(layoutError('RNBQKNBRPPPPPPPP')) // both bishops on the same colour
 })

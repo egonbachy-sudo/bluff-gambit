@@ -14,7 +14,7 @@
 - `server/game.ts` : machine d'état pure (setup → move → challenge → … → over), `view()` filtre ce que chaque joueur voit
 - `server/index.ts` : Socket.IO, comptes, matchmaking, pendules, fin de partie → SQLite
 - `server/db.ts` : schéma + accès SQLite via libSQL (`data/bluff.db` en local, Turso en ligne si `TURSO_DATABASE_URL` est défini)
-- `client/` : React (App.tsx = pages, Game.tsx = plateau, Tutorial.tsx = tutoriel scripté en 8 étapes, local, sans serveur)
+- `client/` : React (App.tsx = en-tête + pages, Board.tsx = plateau animé partagé (glissements, prises qui volent au cimetière), Game.tsx = partie, Tutorial.tsx = tutoriel scripté en 8 étapes, local, sans serveur)
 
 ## Règle d'or
 Le type des pièces adverses ne doit jamais sortir du serveur avant la fin (`view()`). Toute entrée client est validée côté serveur.
