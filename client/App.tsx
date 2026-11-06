@@ -129,7 +129,7 @@ export function App() {
   )
 }
 
-// ---------- home: animated board that loops random scenes showing every mechanic ----------
+// ---------- home: animated board that loops through scenes showing every mechanic ----------
 const HF = 'abcdefgh'
 const hsq = (n: string): Sq => ({ x: HF.indexOf(n[0]), y: Number(n[1]) - 1 })
 /** Enemy pieces are hidden: the real kind only shows when a scene reveals it. */
@@ -219,12 +219,10 @@ function HeroBoard({ skins }: { skins: Skins }) {
       wait: (ms) => new Promise((r) => setTimeout(r, ms)),
     }
     ;(async () => {
-      let prev = -1
+      let n = -1
       await h.wait(1200)
       while (alive) {
-        let n = prev
-        while (n === prev) n = Math.floor(Math.random() * SCENES.length)
-        prev = n
+        n = (n + 1) % SCENES.length // scenes play in order, then loop
         await SCENES[n](h)
         if (!alive) return
         setBadge((b) => b && { ...b, leaving: true })
