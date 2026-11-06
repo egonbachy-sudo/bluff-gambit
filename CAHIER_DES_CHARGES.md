@@ -42,6 +42,7 @@ Jeu d'échecs à information cachée et à bluff, en ligne (mobile + PC), serveu
 ### Vies et fin de partie
 - 10 vies chacun.
 - Fins possibles : roi capturé, 0 vie, abandon, temps écoulé.
+- Deux rois seuls sur le plateau (une fois la dernière prise confirmée, sans contestation gagnante) : la partie s'arrête, le joueur avec le plus de vies gagne ; à égalité, celui dont la prise a laissé les rois seuls.
 - Pas de règle des 50 coups.
 - Temps par joueur choisi par l'hôte de la partie : 3, 5, 10 ou 20 minutes.
 

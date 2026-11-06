@@ -819,7 +819,7 @@ function Rules() {
         <h3>Contester</h3>
         <p>Juste après chaque coup adverse, tu as 10 secondes pour contester. Si c'était un bluff, il perd 1 vie et la pièce (et sa prise est annulée). Sinon, c'est toi qui perds 1 vie.</p>
         <h3>Gagner</h3>
-        <p>Capture le roi adverse avec un vrai coup (un bluff sur le roi est démasqué automatiquement), ou fais tomber ses 10 vies, ou gagne au temps.</p>
+        <p>Capture le roi adverse avec un vrai coup (un bluff sur le roi est démasqué automatiquement), ou fais tomber ses 10 vies, ou gagne au temps. S'il ne reste que les deux rois, la partie s'arrête : le joueur qui a le plus de vies gagne (à égalité, celui qui a fait la dernière prise).</p>
         <h3>Marquer</h3>
         <p>Un tour sur deux, avant de jouer, marque une pièce adverse pour t'en souvenir. Les marquages justes rapportent des points.</p>
         <h3>Promotion</h3>

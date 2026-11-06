@@ -31,8 +31,7 @@ test('bot self-play only makes legal decisions and games finish', () => {
     if (g.phase === 'over') ended++
     contested += g.players.w.correctChallenges + g.players.w.wrongChallenges + g.players.b.correctChallenges + g.players.b.wrongChallenges
   }
-  // ~10% end with two lone kings circling each other: only the clock settles those, so they never end here
-  assert.ok(ended >= 22, `only ${ended}/30 games ended`)
+  assert.ok(ended >= 29, `only ${ended}/30 games ended`)
   assert.ok(contested > 0, 'bots never contest')
 })
 

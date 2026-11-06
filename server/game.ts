@@ -61,6 +61,17 @@ function punish(g: Game, p: Piece) {
   else if (pl.lives <= 0) end(g, opp(p.owner), 'plus de vies')
 }
 
+/**
+ * Only the two kings left: nobody can safely take the other, so the game stops here.
+ * More lives wins; with equal lives, `lastTaker` (whose capture left the kings alone) wins.
+ */
+function loneKings(g: Game, lastTaker: Color) {
+  if (g.winner || alive(g).some((p) => p.kind !== 'K')) return
+  const { w, b } = { w: g.players.w.lives, b: g.players.b.lives }
+  if (w === b) end(g, lastTaker, 'rois seuls, égalité de vies : dernière prise')
+  else end(g, w > b ? 'w' : 'b', 'rois seuls, plus de vies')
+}
+
 export function setup(g: Game, c: Color, placement: unknown): string | null {
   if (g.phase !== 'setup' || g.players[c].ready) return 'Placement déjà validé'
   const err = setupError(c, placement)
@@ -102,6 +113,7 @@ export function move(g: Game, c: Color, m: Move): string | null {
     }
     g.log.push(`${NAME[c]} tente de prendre le roi en bluff : démasqué automatiquement, ${NAME[c]} perd 1 vie et son ${NAMES[p.kind]}.`)
     punish(g, p)
+    loneKings(g, foe)
     g.last = null
     if (!g.winner) g.turn = foe
     return null
@@ -154,6 +166,8 @@ export function challenge(g: Game, c: Color, contest: boolean): string | null {
     g.log.push(`${NAME[c]} conteste à tort : le coup était légal. ${NAME[c]} perd 1 vie.`)
     if (g.players[c].lives <= 0) end(g, mover, 'plus de vies')
   }
+  // The move now stands (or the bluffer lost the piece): check for two lone kings.
+  loneKings(g, contest && L.bluff ? c : mover)
   g.last = null
   if (!g.winner) g.phase = 'move'
   return null

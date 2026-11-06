@@ -111,6 +111,7 @@ const STEPS: Step[] = [
     list: [
       'Tu perds 1 vie quand ton bluff est démasqué, ou quand tu contestes à tort.',
       'La partie se termine si un roi est pris, si un joueur n’a plus de vies, si sa pendule tombe à zéro, ou s’il abandonne.',
+      'S’il ne reste que les deux rois, la partie s’arrête : le plus de vies gagne (à égalité, celui qui a fait la dernière prise).',
       'L’hôte choisit le temps de chaque joueur : 3, 5, 10 ou 20 minutes. Tu as 10 secondes pour contester.',
       'Les pièces prises sont révélées dans les cimetières, à côté du plateau. En fin de partie, tout le plateau est révélé.',
       'Pas d’échec, de mat, de pat, de roque, de prise en passant ni de règle des 50 coups.',

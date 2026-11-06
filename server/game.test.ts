@@ -155,6 +155,29 @@ test('start position and history replay to the final board', () => {
   assert.deepEqual([...board].sort(), [...live].sort())
 })
 
+test('two lone kings: more lives wins, equal lives goes to the last capture', () => {
+  const lone = (wLives: number, bLives: number) => {
+    const g = started()
+    for (const p of g.pieces) if (p.kind !== 'K') p.alive = false
+    g.pieces.find((p) => p.owner === 'b' && p.kind === 'K')!.x = 7
+    const king = g.pieces.find((p) => p.owner === 'w' && p.kind === 'K')!
+    // the last black pawn stands next to the white king: taking it leaves only the kings
+    Object.assign(g.pieces.find((p) => p.owner === 'b' && p.kind === 'P')!, { alive: true, x: king.x, y: king.y + 1 })
+    g.players.w.lives = wLives
+    g.players.b.lives = bLives
+    assert.equal(G.move(g, 'w', { pieceId: king.id, to: { x: king.x, y: king.y + 1 }, as: 'K' }), null)
+    assert.equal(g.phase, 'challenge') // not over yet: black may still contest
+    G.challenge(g, 'b', false)
+    return g
+  }
+  const more = lone(4, 7)
+  assert.equal(more.winner, 'b')
+  assert.match(more.reason, /plus de vies/)
+  const tie = lone(5, 5)
+  assert.equal(tie.winner, 'w')
+  assert.match(tie.reason, /dernière prise/)
+})
+
 test('elo is zero-sum and favours the underdog', () => {
   assert.equal(G.eloDelta(1200, 1200, 1), 16)
   assert.ok(G.eloDelta(1000, 1400, 1) > 16)
