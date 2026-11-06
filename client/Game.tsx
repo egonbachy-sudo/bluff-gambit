@@ -31,8 +31,8 @@ const fmt = (ms: number) => {
 }
 const withIds = (p: Placement): SetupPiece[] => p.map((e, i) => ({ ...e, id: `s${i}` }))
 
-export function Game({ v, skins, layout, sound, hints, emote, onLeave }: {
-  v: GameView; skins: Skins; layout: string; sound: boolean; hints: boolean; emote: string; onLeave: () => void
+export function Game({ v, skins, layout, sound, hints, emote, onLeave, savedId }: {
+  v: GameView; skins: Skins; layout: string; sound: boolean; hints: boolean; emote: string; onLeave: () => void; savedId: number | null
 }) {
   const me = v.me, foe = opp(me), now = useNow()
   const pieces = v.pieces as Piece[]
@@ -288,6 +288,7 @@ export function Game({ v, skins, layout, sound, hints, emote, onLeave }: {
             </details>
             <div className="row">
               <button onClick={() => setShowEnd(false)}>Voir le plateau révélé</button>
+              {savedId && <a className="btn" href={`#/replay/${savedId}`}>Revoir la partie</a>}
               <button className="primary" onClick={onLeave}>Menu</button>
             </div>
           </div>

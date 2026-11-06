@@ -8,7 +8,8 @@ type Player = {
   lives: number; captured: Kind[]; marks: Record<string, Kind>; lastMark: number; turns: number; ready: boolean
   correctChallenges: number; wrongChallenges: number; bluffs: number; uncaughtBluffs: number
 }
-type Last = { mover: Color; pieceId: string; from: Sq; to: Sq; as: Kind; real: Kind; bluff: boolean; captured: Piece | null }
+type Last = { mover: Color; pieceId: string; from: Sq; to: Sq; as: Kind; real: Kind; bluff: boolean; captured: Piece | null; promo?: Kind }
+export type StartPiece = { id: string; owner: Color; kind: Kind; x: number; y: number }
 export type Game = {
   phase: 'setup' | 'move' | 'challenge' | 'over'
   /** Side that must act now (in 'challenge' it is the challenger, who moves next). */
@@ -18,6 +19,8 @@ export type Game = {
   last: Last | null
   log: string[]
   history: (Last & { challenged: boolean })[]
+  /** Position right after both placements: with history it replays the whole game. */
+  start: StartPiece[]
   winner: Color | null
   reason: string
 }
@@ -32,7 +35,7 @@ const player = (): Player => ({
 
 export const newGame = (): Game => ({
   phase: 'setup', turn: 'w', pieces: [], players: { w: player(), b: player() },
-  last: null, log: [], history: [], winner: null, reason: '',
+  last: null, log: [], history: [], start: [], winner: null, reason: '',
 })
 
 const alive = (g: Game) => g.pieces.filter((p) => p.alive)
@@ -68,6 +71,7 @@ export function setup(g: Game, c: Color, placement: unknown): string | null {
   if (g.players[opp(c)].ready) {
     g.phase = 'move'
     g.turn = 'w'
+    g.start = g.pieces.map(({ id, owner, kind, x, y }) => ({ id, owner, kind, x, y }))
     g.log.push('La partie commence, Blanc joue.')
   }
   return null
@@ -104,6 +108,7 @@ export function move(g: Game, c: Color, m: Move): string | null {
   }
 
   const real = p.kind
+  let promo: Kind | undefined
   if (target) {
     target.alive = false
     g.players[foe].captured.push(target.kind)
@@ -116,10 +121,10 @@ export function move(g: Game, c: Color, m: Move): string | null {
     const i = me.captured.indexOf(m.promo)
     if (i >= 0) {
       me.captured.splice(i, 1)
-      p.kind = m.promo
+      p.kind = promo = m.promo
     }
   }
-  g.last = { mover: c, pieceId: p.id, from, to, as: m.as, real, bluff, captured: target }
+  g.last = { mover: c, pieceId: p.id, from, to, as: m.as, real, bluff, captured: target, promo }
   g.log.push(`${NAME[c]} : ${sqName(from)} → ${sqName(to)}${target ? ` (prend : ${NAMES[target.kind]})` : ''}`)
   g.phase = 'challenge'
   g.turn = foe

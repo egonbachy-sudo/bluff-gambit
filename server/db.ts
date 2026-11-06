@@ -55,3 +55,5 @@ CREATE INDEX IF NOT EXISTS game_players_user ON game_players(user_id, ended_at);
 await client.execute('ALTER TABLE users ADD COLUMN layout TEXT').catch(() => {})
 await client.execute('ALTER TABLE users ADD COLUMN google_sub TEXT').catch(() => {})
 await client.execute('CREATE UNIQUE INDEX IF NOT EXISTS users_google ON users(google_sub)')
+await client.execute('ALTER TABLE games ADD COLUMN start TEXT').catch(() => {})
+await client.execute('CREATE TABLE IF NOT EXISTS rewards (user_id INTEGER NOT NULL, day TEXT NOT NULL, quest TEXT NOT NULL, xp INTEGER NOT NULL, PRIMARY KEY (user_id, day, quest))')

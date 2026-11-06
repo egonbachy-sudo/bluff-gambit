@@ -24,7 +24,8 @@ Deux onglets, sans cocher « Rester connecté » (le jeton est alors stocké par
 
 ## Avancement
 - Fait : règles, comptes, parties classées et privées, pendules, contestation, marquage, promotion, score, Elo, classements, quêtes, skins, thèmes, paramètres, règles, emotes, historique, face-à-face, Bluffbot (entraînement, partie non sauvegardée), tutoriel interactif
-- À faire : niveaux du bot, replay coup par coup, quêtes quotidiennes, PWA
+- Fait aussi : niveaux du bot (facile/normal/difficile, réglés par auto-parties), replay coup par coup (`Replay.tsx`, départ + historique en base), quêtes du jour (3 par jour UTC, XP en table `rewards`), saisons mensuelles (classement « Saison »), appli installable (`client/public` : manifeste, icônes, `sw.js`), liaison Google depuis Mon compte, sessions qui expirent après 30 jours sans usage
+- À faire : à définir
 
 ## Mise en ligne
 Render (gratuit, `render.yaml` + `Dockerfile`) + Turso (base gratuite). Marche à suivre : `DEPLOIEMENT.md`. Production : `npm run build` puis `npm start` (`--prod` sert `client/dist`).

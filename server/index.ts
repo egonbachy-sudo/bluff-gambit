@@ -7,7 +7,7 @@ import { all, get, run } from './db.ts'
 import type { Row } from './db.ts'
 import * as G from './game.ts'
 import * as Bot from './bot.ts'
-import { nameError, layoutError, layoutPlacement, opp, randomSetup, levelOf, DEFAULT_LAYOUT, CHALLENGE_SECONDS, DEFAULT_UNLOCKS, EMOTES, QUESTS, TIME_CONTROLS } from '../shared/rules.ts'
+import { dailyQuests, dayKey, seasonOf, nameError, layoutError, layoutPlacement, opp, randomSetup, levelOf, DEFAULT_LAYOUT, CHALLENGE_SECONDS, DEFAULT_UNLOCKS, EMOTES, QUESTS, TIME_CONTROLS } from '../shared/rules.ts'
 import type { Color } from '../shared/rules.ts'
 
 const PORT = Number(process.env.PORT ?? 3000)
@@ -24,7 +24,7 @@ const io = new Server(server)
 
 // ---------- static files (production) ----------
 const DIST = 'client/dist'
-const TYPES: Record<string, string> = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon' }
+const TYPES: Record<string, string> = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon', '.webmanifest': 'application/manifest+json' }
 async function serveStatic(req: http.IncomingMessage, res: http.ServerResponse) {
   if (req.url?.startsWith('/socket.io')) return
   let file = join(DIST, normalize(decodeURIComponent(new URL(req.url ?? '/', 'http://x').pathname)).replace(/^[/\\]+/, ''))
@@ -44,27 +44,56 @@ const checkPw = (pw: string, stored: string) => {
   const a = Buffer.from(h, 'hex'), b = scryptSync(pw, salt, 64)
   return a.length === b.length && timingSafeEqual(a, b)
 }
-// shortcut: sessions never expire, add an expiry column if accounts get stolen tokens
+/** Sessions expire after 30 days without use; each use (at most once a day) pushes the deadline back. */
+const SESSION_MS = 30 * 86_400_000
+await run('DELETE FROM sessions WHERE created_at < ?', Date.now() - SESSION_MS)
 async function newSession(userId: number) {
   const token = randomBytes(32).toString('hex')
   await run('INSERT INTO sessions VALUES (?, ?, ?)', token, userId, Date.now())
   return token
 }
-const userByToken = async (t: unknown) =>
-  typeof t === 'string' ? ((await get('SELECT user_id FROM sessions WHERE token = ?', t))?.user_id as number | undefined) : undefined
+async function userByToken(t: unknown) {
+  if (typeof t !== 'string') return undefined
+  const s = await get('SELECT user_id, created_at FROM sessions WHERE token = ?', t)
+  if (!s) return undefined
+  const age = Date.now() - s.created_at
+  if (age > SESSION_MS) {
+    await run('DELETE FROM sessions WHERE token = ?', t)
+    return undefined
+  }
+  if (age > 86_400_000) await run('UPDATE sessions SET created_at = ? WHERE token = ?', Date.now(), t)
+  return s.user_id as number
+}
 
 async function stats(id: number) {
-  return (await get(`SELECT COUNT(*) games, COALESCE(SUM(won), 0) wins, COALESCE(SUM(score), 0) xp,
+  return (await get(`SELECT COUNT(*) games, COALESCE(SUM(won), 0) wins,
+    COALESCE(SUM(score), 0) + (SELECT COALESCE(SUM(xp), 0) FROM rewards WHERE user_id = ?) xp,
     COALESCE(SUM(correct_challenges), 0) correct_challenges, COALESCE(SUM(wrong_challenges), 0) wrong_challenges,
     COALESCE(SUM(correct_marks), 0) correct_marks, COALESCE(SUM(uncaught_bluffs), 0) uncaught_bluffs,
     COALESCE(MAX(CASE WHEN won = 1 THEN lives END), 0) best_lives
-    FROM game_players WHERE user_id = ?`, id))!
+    FROM game_players WHERE user_id = ?`, id, id))!
+}
+/** Today's quests with progress; finished ones are rewarded once (their XP joins the total). */
+async function daily(id: number) {
+  const day = dayKey(), since = Date.parse(day)
+  const st = (await get(`SELECT COUNT(*) games, COALESCE(SUM(gp.won), 0) wins, COALESCE(SUM(gp.correct_challenges), 0) correct_challenges,
+    COALESCE(SUM(gp.uncaught_bluffs), 0) uncaught_bluffs, COALESCE(SUM(gp.correct_marks), 0) correct_marks,
+    COALESCE(SUM(g.ranked), 0) ranked, COALESCE(MAX(gp.score), 0) best_score, COALESCE(MAX(CASE WHEN gp.won = 1 THEN gp.lives END), 0) best_lives
+    FROM game_players gp JOIN games g ON g.id = gp.game_id WHERE gp.user_id = ? AND gp.ended_at >= ?`, id, since))!
+  const quests = dailyQuests(day).map((q) => ({ ...q, progress: Math.min(st[q.stat] ?? 0, q.goal), done: (st[q.stat] ?? 0) >= q.goal }))
+  for (const q of quests) if (q.done) await run('INSERT OR IGNORE INTO rewards VALUES (?, ?, ?, ?)', id, day, q.id, q.xp)
+  return { quests, resetAt: since + 86_400_000 }
 }
 const unlockedOf = (st: Row) => [...DEFAULT_UNLOCKS, ...QUESTS.filter((q) => st[q.stat] >= q.goal).map((q) => q.reward)]
 async function profile(id: number) {
-  const u = await get('SELECT id, name, email, elo, piece_skin, board_skin, layout FROM users WHERE id = ?', id)
+  const u = (await get('SELECT id, name, email, elo, piece_skin, board_skin, layout, google_sub, hash FROM users WHERE id = ?', id))!
+  const dq = await daily(id) // first: it may grant XP that stats() then counts
   const st = await stats(id)
-  return { ...u, layout: u?.layout ?? DEFAULT_LAYOUT, stats: st, level: levelOf(st.xp), unlocked: unlockedOf(st), inGame: roomOf.has(id) }
+  const { google_sub, hash, ...pub } = u
+  return {
+    ...pub, layout: u.layout ?? DEFAULT_LAYOUT, google: !!google_sub, hasPassword: hash !== '!',
+    stats: st, level: levelOf(st.xp), unlocked: unlockedOf(st), inGame: roomOf.has(id), daily: dq, season: seasonOf(),
+  }
 }
 // The training bot is a regular user row whose hash can never match a password.
 const BOT_EMAIL = 'bot@bluff.local'
@@ -111,7 +140,7 @@ function leaveQueues(id: number) {
   for (const [code, p] of privates) if (p.host === id) privates.delete(code)
 }
 
-async function startRoom(a: number, b: number, minutes: number, ranked: boolean) {
+async function startRoom(a: number, b: number, minutes: number, ranked: boolean, level: Bot.Level = 'normal') {
   leaveQueues(a)
   leaveQueues(b)
   starting.add(a).add(b)
@@ -126,7 +155,8 @@ async function startRoom(a: number, b: number, minutes: number, ranked: boolean)
   }
   if (b === BOT_ID) {
     room.bot = w === BOT_ID ? 'w' : 'b'
-    room.mem = Bot.newMem()
+    room.mem = Bot.newMem(level)
+    room.names[room.bot] = `Bluffbot 🤖 ${level}`
   }
   for (const id of [w, bl]) if (id !== BOT_ID) roomOf.set(id, room)
   after(room)
@@ -229,8 +259,8 @@ function finish(r: Room) {
   const delta = (r.eloDelta = { w: d, b: -d })
   for (const c of ['w', 'b'] as Color[]) roomOf.delete(r.players[c])
   ;(async () => {
-    const gameId = await run('INSERT INTO games (white, black, winner, reason, ranked, minutes, history, ended_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-      r.players.w, r.players.b, g.winner, g.reason, r.ranked ? 1 : 0, r.minutes, JSON.stringify(g.history), now)
+    const gameId = await run('INSERT INTO games (white, black, winner, reason, ranked, minutes, history, start, ended_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      r.players.w, r.players.b, g.winner, g.reason, r.ranked ? 1 : 0, r.minutes, JSON.stringify(g.history), JSON.stringify(g.start), now)
     for (const c of ['w', 'b'] as Color[]) {
       const s = G.stats(g, c), uid = r.players[c]
       await run('INSERT INTO game_players VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
@@ -238,7 +268,7 @@ function finish(r: Room) {
         s.correctMarks, s.uncaughtBluffs, r.elo[c], r.elo[c] + delta[c], now)
       await run('UPDATE users SET elo = elo + ? WHERE id = ?', delta[c], uid)
     }
-    for (const c of ['w', 'b'] as Color[]) io.to(`u${r.players[c]}`).emit('saved')
+    for (const c of ['w', 'b'] as Color[]) io.to(`u${r.players[c]}`).emit('saved', gameId)
   })().catch((e) => console.error('save game', e))
 }
 
@@ -247,7 +277,7 @@ const sumBoard = (col: string) => `SELECT u.name, SUM(g.${col}) value FROM game_
   WHERE g.ended_at > ? GROUP BY u.id HAVING value > 0 ORDER BY value DESC LIMIT 50`
 const BOARDS: Record<string, string> = {
   elo: `SELECT name, elo value FROM users WHERE ? >= 0 AND EXISTS (SELECT 1 FROM game_players g WHERE g.user_id = users.id) ORDER BY elo DESC LIMIT 50`,
-  week: sumBoard('score'), wins: sumBoard('won'), bluff: sumBoard('uncaught_bluffs'), detect: sumBoard('correct_challenges'),
+  week: sumBoard('score'), season: sumBoard('score'), wins: sumBoard('won'), bluff: sumBoard('uncaught_bluffs'), detect: sumBoard('correct_challenges'),
 }
 
 // ---------- sockets ----------
@@ -356,6 +386,25 @@ io.on('connection', (socket) => {
     return { token: await newSession(id), profile: await profile(id) }
   }, false)
 
+  on('google:link', async (d, id) => {
+    const g = await verifyGoogle(d.credential)
+    const other = await get('SELECT id FROM users WHERE google_sub = ?', g.sub)
+    if (other && other.id !== id) throw new Error('Ce compte Google est déjà relié à un autre joueur')
+    await run('UPDATE users SET google_sub = ? WHERE id = ?', g.sub, id)
+    return profile(id)
+  })
+
+  on('replay', async (d, id) => {
+    const g = await get(`SELECT g.*, w.name white_name, b.name black_name FROM games g
+      JOIN users w ON w.id = g.white JOIN users b ON b.id = g.black WHERE g.id = ? AND (g.white = ? OR g.black = ?)`, Number(d.id), id, id)
+    if (!g) throw new Error('Partie introuvable')
+    if (!g.start) throw new Error('Cette partie a été jouée avant l’arrivée des replays')
+    return {
+      start: JSON.parse(g.start), history: JSON.parse(g.history), names: { w: g.white_name, b: g.black_name },
+      me: g.white === id ? 'w' : 'b', winner: g.winner, reason: g.reason, ended_at: g.ended_at,
+    }
+  })
+
   on('logout', async (d, id) => {
     await run('DELETE FROM sessions WHERE token = ?', str(d.token))
     leaveQueues(id)
@@ -368,7 +417,8 @@ io.on('connection', (socket) => {
 
   on('password', async (d, id) => {
     const u = (await get('SELECT hash FROM users WHERE id = ?', id))!
-    if (typeof d.old !== 'string' || !checkPw(d.old, u.hash)) throw new Error('Ancien mot de passe incorrect')
+    // Google-only accounts have no password yet: they may set one without the old one.
+    if (u.hash !== '!' && (typeof d.old !== 'string' || !checkPw(d.old, u.hash))) throw new Error('Ancien mot de passe incorrect')
     if (typeof d.new !== 'string' || d.new.length < 8) throw new Error('Mot de passe : 8 caractères minimum')
     await run('UPDATE users SET hash = ? WHERE id = ?', hashPw(d.new), id)
   })
@@ -389,11 +439,11 @@ io.on('connection', (socket) => {
 
   on('leaderboard', (d) => {
     const sql = BOARDS[str(d.kind)] ?? BOARDS.elo
-    return all(sql, d.kind === 'week' ? Date.now() - 7 * 86_400_000 : 0)
+    return all(sql, d.kind === 'week' ? Date.now() - 7 * 86_400_000 : d.kind === 'season' ? seasonOf().start : 0)
   }, false)
 
   on('history', async (_, id) => ({
-    games: await all(`SELECT gp.won, gp.score, gp.elo_before, gp.elo_after, gp.ended_at, u.name opponent, g.reason, g.ranked
+    games: await all(`SELECT gp.game_id, g.start IS NOT NULL replayable, gp.won, gp.score, gp.elo_before, gp.elo_after, gp.ended_at, u.name opponent, g.reason, g.ranked
       FROM game_players gp JOIN game_players o ON o.game_id = gp.game_id AND o.user_id <> gp.user_id
       JOIN users u ON u.id = o.user_id JOIN games g ON g.id = gp.game_id
       WHERE gp.user_id = ? ORDER BY gp.ended_at DESC LIMIT 15`, id),
@@ -423,7 +473,8 @@ io.on('connection', (socket) => {
   })
   on('bot:start', async (d, id) => {
     notInGame(id)
-    await startRoom(id, BOT_ID, minutesOf(d), false)
+    const level = Bot.LEVELS.includes(d.level) ? (d.level as Bot.Level) : 'normal'
+    await startRoom(id, BOT_ID, minutesOf(d), false, level)
   })
   on('queue:leave', (_, id) => leaveQueues(id))
   on('private:create', (d, id) => {

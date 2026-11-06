@@ -446,3 +446,26 @@ progress::-moz-progress-bar { background: linear-gradient(90deg, var(--accent), 
 .google-btn { display: flex; justify-content: center; min-height: 44px; color-scheme: light; }
 .or { display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: 0.85rem; }
 .or::before, .or::after { content: ''; flex: 1; height: 1px; background: var(--border); }
+
+/* ================= daily quests, replay ================= */
+.daily { margin-top: 14px; }
+.daily-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+.daily-head h3 { margin: 0; }
+.daily .quests { padding: 4px 0 0; }
+.xp { color: var(--accent); font-weight: 700; margin-left: 4px; }
+.small-seg { margin: 4px 0 8px; }
+.small-seg button { min-height: 32px; padding: 0.25em 0.8em; font-size: 0.88rem; }
+.season { margin-top: -6px; }
+.ranking li .btn.small { min-height: 30px; padding: 0.2em 0.7em; font-size: 0.82rem; }
+.replay-now { min-height: 3em; }
+.tag { display: inline-block; margin-left: 6px; padding: 1px 8px; border-radius: 99px; font-size: 0.78rem; font-weight: 700; }
+.tag.caught { background: color-mix(in srgb, var(--danger) 22%, transparent); color: var(--danger); }
+.tag.ok { background: color-mix(in srgb, var(--success) 22%, transparent); color: var(--success); }
+.scrub { width: 100%; accent-color: var(--accent); padding: 0; min-height: 28px; border: 0; background: transparent; }
+.replay-controls { justify-content: center; }
+.replay-controls button { min-width: 48px; }
+.moves { padding-left: 2.6em; }
+.move-link { background: transparent; border: 0; min-height: 0; padding: 3px 6px; color: var(--muted); font-size: 0.86rem; justify-content: flex-start; text-align: left; width: 100%; }
+.move-link:hover:not(:disabled) { transform: none; background: var(--surface-2); color: var(--text); }
+.move-link.on { color: var(--text); background: color-mix(in srgb, var(--accent) 18%, transparent); box-shadow: none; }
+.move-link.bluff { color: var(--accent); }

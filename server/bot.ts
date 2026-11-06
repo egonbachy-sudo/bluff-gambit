@@ -4,12 +4,21 @@ import type { Color, Kind, Sq } from '../shared/rules.ts'
 import type { Move, View } from './game.ts'
 
 type P = { id: string; owner: Color; x: number; y: number; kind?: Kind; moved?: boolean }
+export type Level = 'facile' | 'normal' | 'difficile'
+export const LEVELS: Level[] = ['facile', 'normal', 'difficile']
+/** Tuned by self-play (300 games each): difficile beats normal ~58%, both beat facile ~70%. */
+const TUNING: Record<Level, { noise: number; danger: number; bluff: number; contestBase: number; contestSpread: number; learns: boolean; kingSafety: number }> = {
+  facile: { noise: 8, danger: 0.1, bluff: 0.1, contestBase: 0.85, contestSpread: 0.2, learns: false, kingSafety: 0 },
+  normal: { noise: 2.5, danger: 0.5, bluff: 0.25, contestBase: 0.6, contestSpread: 0.3, learns: true, kingSafety: 1 },
+  difficile: { noise: 2.5, danger: 0.5, bluff: 0.3, contestBase: 0.4, contestSpread: 0.2, learns: true, kingSafety: 1 },
+}
 /** What the bot believes about each enemy piece: kinds still consistent with its moves. */
-export type Mem = { possible: Map<string, Set<Kind>>; moved: Set<string> }
-export const newMem = (): Mem => ({ possible: new Map(), moved: new Set() })
+export type Mem = { possible: Map<string, Set<Kind>>; moved: Set<string>; level: Level }
+export const newMem = (level: Level = 'normal'): Mem => ({ possible: new Map(), moved: new Set(), level })
 
 const COUNT: Record<Kind, number> = { K: 1, Q: 1, R: 2, B: 2, N: 2, P: 8 }
 const key = (x: number, y: number) => x * 8 + y
+const same = (a: Sq, b: Sq) => a.x === b.x && a.y === b.y
 const mass = (s: Iterable<Kind>) => [...s].reduce((a, k) => a + COUNT[k], 0)
 const possibleOf = (m: Mem, id: string) => m.possible.get(id) ?? new Set(KINDS)
 const chance = (m: Mem, id: string, k: Kind) => {
@@ -18,8 +27,8 @@ const chance = (m: Mem, id: string, k: Kind) => {
 }
 /** Expected worth of capturing an enemy piece; the king counts as the game. */
 const worth = (m: Mem, id: string) => {
-  const s = possibleOf(m, id)
-  return [...s].reduce((a, k) => a + COUNT[k] * (k === 'K' ? 30 : VALUE[k]), 0) / mass(s)
+  const s = possibleOf(m, id), king = 30
+  return [...s].reduce((a, k) => a + COUNT[k] * (k === 'K' ? king : VALUE[k]), 0) / mass(s)
 }
 const grid = (ps: P[]) => new Map(ps.map((p) => [key(p.x, p.y), p.owner]))
 const occOf = (g: Map<number, Color>) => (x: number, y: number) => g.get(key(x, y)) ?? null
@@ -38,11 +47,13 @@ export function challengeTurn(m: Mem, v: View, rnd = Math.random) {
   let pBluff = both.length ? (1 - mass(both) / mass(prior)) * 0.7 : 0.95
   if (L.capture) pBluff += 0.1
   if (v.lives[me] <= 2) pBluff -= 0.25
-  const contest = pBluff > 0.45 + rnd() * 0.3
+  const t = TUNING[m.level]
+  const contest = pBluff > t.contestBase + rnd() * t.contestSpread
   return {
     contest,
     learn(after: View) {
       if (!(after.pieces as P[]).some((p) => p.id === piece.id)) return void m.possible.delete(piece.id)
+      if (!t.learns) return
       m.possible.set(piece.id, new Set(both.length ? both : compat))
       m.moved.add(piece.id)
     },
@@ -65,9 +76,11 @@ export function decideMove(m: Mem, v: View, rnd = Math.random): Move {
   const now = grid(ps), occ = occOf(now)
   const attacked = (sq: Sq, o: (x: number, y: number) => Color | null) =>
     enemies.some((e) => (e.x !== sq.x || e.y !== sq.y) && [...possibleOf(m, e.id)].some((k) => canMove(k, foe, e, sq, o, m.moved.has(e.id))))
-  const tryBluff = rnd() < 0.3
+  const t = TUNING[m.level]
+  const tryBluff = rnd() < t.bluff
   const promo = [...v.captured[me]].filter((k) => k !== 'P' && k !== 'K').sort((a, b) => VALUE[b] - VALUE[a])[0]
 
+  const king = mine.find((p) => p.kind === 'K')
   let best: { s: number; move: Move } | null = null
   for (const p of mine) {
     const kind = p.kind!, value = VALUE[kind] + (kind === 'K' ? 40 : 0)
@@ -81,11 +94,16 @@ export function decideMove(m: Mem, v: View, rnd = Math.random): Move {
         const after = new Map(now)
         after.delete(key(p.x, p.y))
         after.set(key(to.x, to.y), me)
-        let s = rnd() * 0.4
+        let s = rnd() * t.noise
         if (target) s += worth(m, target.id) * (bluff ? 0.6 : 1)
-        if (attacked(to, occOf(after))) s -= value * 0.8
-        else if (inDanger) s += value * 0.5
-        if (kind === 'K') s -= 1
+        if (attacked(to, occOf(after))) s -= value * t.danger
+        else if (inDanger) s += value * 0.5 * t.danger
+        if (kind === 'K') s -= m.level === 'difficile' ? 3 : 1
+        // Does this move leave our king where a real enemy move could take it?
+        if (t.kingSafety && king) {
+          const k = kind === 'K' ? to : king
+          if (attacked(k, occOf(after)) && !(target && same(target, k))) s -= t.kingSafety
+        }
         if (kind === 'P') s += 0.15 * Math.abs(to.y - p.y)
         if (bluff) {
           const risk = VALUE[kind] + 3 + (kind === 'K' ? 100 : 0)

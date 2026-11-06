@@ -6,8 +6,8 @@ import * as G from './game.ts'
 import * as Bot from './bot.ts'
 
 /** Bot vs bot: every decision must be accepted by the engine. */
-function selfPlay(maxPlies = 600) {
-  const g = G.newGame(), mem = { w: Bot.newMem(), b: Bot.newMem() }
+function selfPlay(maxPlies = 600, levels: Record<Color, Bot.Level> = { w: 'normal', b: 'normal' }) {
+  const g = G.newGame(), mem = { w: Bot.newMem(levels.w), b: Bot.newMem(levels.b) }
   for (const c of ['w', 'b'] as Color[]) assert.equal(G.setup(g, c, randomSetup(c)), null)
   for (let i = 0; i < maxPlies && g.phase !== 'over'; i++) {
     const c = g.turn
@@ -48,4 +48,14 @@ test('bot contests a move that contradicts what the piece already showed', () =>
   const r = G.move(g, 'w', { pieceId: knight.id, to: { x: 3, y: 5 }, as: 'R' })
   assert.equal(r, null)
   assert.ok(Bot.challengeTurn(mem, G.view(g, 'b'), () => 0.99).contest)
+})
+
+test('harder levels beat easier ones', () => {
+  let hardWins = 0
+  for (let i = 0; i < 40; i++) {
+    const hardSide: Color = i % 2 ? 'w' : 'b'
+    const g = selfPlay(600, hardSide === 'w' ? { w: 'difficile', b: 'facile' } : { w: 'facile', b: 'difficile' })
+    if (g.winner === hardSide) hardWins++
+  }
+  assert.ok(hardWins >= 21, `difficile only won ${hardWins}/40 against facile`)
 })

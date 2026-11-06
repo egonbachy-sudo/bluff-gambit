@@ -127,3 +127,33 @@ export const QUESTS = [
   { id: 'flawless', label: 'Gagner une partie avec tes 10 vies', stat: 'best_lives', goal: 10, reward: 'board:amethyste' },
   { id: 'win15', label: 'Gagner 15 parties', stat: 'wins', goal: 15, reward: 'pieces:or' },
 ]
+
+// ---------- daily quests & seasons ----------
+export const DAILY_POOL = [
+  { id: 'd_play2', label: 'Jouer 2 parties', stat: 'games', goal: 2, xp: 50 },
+  { id: 'd_win1', label: 'Gagner 1 partie', stat: 'wins', goal: 1, xp: 80 },
+  { id: 'd_detect2', label: 'Réussir 2 contestations', stat: 'correct_challenges', goal: 2, xp: 60 },
+  { id: 'd_bluff3', label: 'Réussir 3 bluffs jamais démasqués', stat: 'uncaught_bluffs', goal: 3, xp: 60 },
+  { id: 'd_marks3', label: 'Faire 3 marquages justes', stat: 'correct_marks', goal: 3, xp: 60 },
+  { id: 'd_ranked1', label: 'Jouer 1 partie classée', stat: 'ranked', goal: 1, xp: 50 },
+  { id: 'd_score200', label: 'Marquer 200 points en une partie', stat: 'best_score', goal: 200, xp: 70 },
+  { id: 'd_lives8', label: 'Gagner en gardant 8 vies ou plus', stat: 'best_lives', goal: 8, xp: 90 },
+]
+/** UTC day, e.g. "2026-11-06": everyone gets the same 3 daily quests. */
+export const dayKey = (t = Date.now()) => new Date(t).toISOString().slice(0, 10)
+export function dailyQuests(day: string) {
+  let h = 0
+  for (const ch of day) h = (h * 31 + ch.charCodeAt(0)) >>> 0
+  const pool = [...DAILY_POOL], picked: typeof DAILY_POOL = []
+  for (let i = 0; i < 3; i++) {
+    h = (h * 1103515245 + 12345) >>> 0
+    picked.push(pool.splice(h % pool.length, 1)[0])
+  }
+  return picked
+}
+const MONTHS = ['janvier', 'février', 'mars', 'avril', 'mai', 'juin', 'juillet', 'août', 'septembre', 'octobre', 'novembre', 'décembre']
+/** Seasons are calendar months (UTC). */
+export function seasonOf(t = Date.now()) {
+  const d = new Date(t), y = d.getUTCFullYear(), m = d.getUTCMonth()
+  return { label: `Saison de ${MONTHS[m]} ${y}`, start: Date.UTC(y, m, 1), end: Date.UTC(y, m + 1, 1) }
+}

@@ -139,6 +139,22 @@ test('view never leaks enemy kinds before the end', () => {
   assert.ok(G.view(g, 'w').pieces.every((p) => 'kind' in p))
 })
 
+test('start position and history replay to the final board', () => {
+  const g = started()
+  G.move(g, 'w', { pieceId: id(g, 4, 1), to: { x: 4, y: 3 }, as: 'P' })
+  G.challenge(g, 'b', false)
+  G.move(g, 'b', { pieceId: id(g, 3, 6), to: { x: 3, y: 2 }, as: 'Q' }) // bluff, caught
+  G.challenge(g, 'w', true)
+  const board = new Map(g.start.map((p) => [p.x * 8 + p.y, p.kind + p.owner]))
+  for (const h of g.history) {
+    const piece = board.get(h.from.x * 8 + h.from.y)!
+    board.delete(h.from.x * 8 + h.from.y)
+    if (!(h.bluff && h.challenged)) board.set(h.to.x * 8 + h.to.y, (h.promo ?? piece[0]) + piece[1])
+  }
+  const live = new Map(g.pieces.filter((p) => p.alive).map((p) => [p.x * 8 + p.y, p.kind + p.owner]))
+  assert.deepEqual([...board].sort(), [...live].sort())
+})
+
 test('elo is zero-sum and favours the underdog', () => {
   assert.equal(G.eloDelta(1200, 1200, 1), 16)
   assert.ok(G.eloDelta(1000, 1400, 1) > 16)
@@ -160,4 +176,16 @@ test('pseudos: format and reserved names', () => {
   for (const ok of ['Egon', 'wolf_xs', 'Robot-42', 'Botanique']) assert.equal(nameError(ok), null, ok)
   for (const bad of ['Admin', 'xX_admin_Xx', '4dm1n', 'SuperModerateur', 'root', 'Bluffbot', 'Support2', 'ab', 'nom avec espace', 'a'.repeat(17)])
     assert.ok(nameError(bad), bad)
+})
+
+test('daily quests: 3 distinct per day, same for everyone, change across days', async () => {
+  const { dailyQuests, seasonOf } = await import('../shared/rules.ts')
+  const a = dailyQuests('2026-11-06'), b = dailyQuests('2026-11-06'), c = dailyQuests('2026-11-07')
+  assert.equal(new Set(a.map((q) => q.id)).size, 3)
+  assert.deepEqual(a, b)
+  assert.ok([...Array(10)].some((_, i) => dailyQuests(`2026-12-${10 + i}`).map((q) => q.id).join() !== a.map((q) => q.id).join()))
+  assert.ok(c.length === 3)
+  const s = seasonOf(Date.UTC(2026, 10, 15))
+  assert.equal(s.label, 'Saison de novembre 2026')
+  assert.equal(s.end, Date.UTC(2026, 11, 1))
 })

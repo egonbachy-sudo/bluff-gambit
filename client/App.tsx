@@ -6,12 +6,15 @@ import type { GameView } from './Game.tsx'
 import { Board, PieceIcon, reducedMotion } from './Board.tsx'
 import type { BoardPiece, Skins } from './Board.tsx'
 import { Tutorial } from './Tutorial.tsx'
+import { Replay } from './Replay.tsx'
 import { layoutError, levelOf, placementLayout, randomSetup, BOARD_SKINS, DEFAULT_LAYOUT, KINDS, NAMES, PIECE_SKINS, QUESTS, TIME_CONTROLS } from '../shared/rules.ts'
 import type { Kind, Sq } from '../shared/rules.ts'
 
 type Profile = {
   id: number; name: string; email: string; elo: number; piece_skin: string; board_skin: string; layout: string
-  stats: Record<string, number>; level: number; unlocked: string[]; inGame: boolean
+  stats: Record<string, number>; level: number; unlocked: string[]; inGame: boolean; google: boolean; hasPassword: boolean
+  daily: { quests: { id: string; label: string; goal: number; progress: number; done: boolean; xp: number }[]; resetAt: number }
+  season: { label: string; start: number; end: number }
 }
 type Online = { players: number; visitors: number }
 type Settings = { theme: string; hints: boolean; sound: boolean }
@@ -34,6 +37,7 @@ export function App() {
   const [online, setOnline] = useState<Online>({ players: 0, visitors: 0 })
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [googleClientId, setGoogleClientId] = useState('')
+  const [savedId, setSavedId] = useState<number | null>(null)
   const [view, setView] = useState<GameView | null>(null)
   const [emote, setEmote] = useState('')
   const [settings, setSettings] = useState(loadSettings)
@@ -75,7 +79,11 @@ export function App() {
     socket.on('connect', refresh)
     socket.on('game', onGame)
     socket.on('emote', onEmote)
-    socket.on('saved', refresh) // the finished game is stored: stats and quests changed
+    const onSaved = (id: number) => {
+      setSavedId(id)
+      refresh() // the finished game is stored: stats and quests changed
+    }
+    socket.on('saved', onSaved)
     socket.on('online', setOnline)
     if (socket.connected) refresh()
     return () => {
@@ -83,7 +91,7 @@ export function App() {
       socket.off('connect', refresh)
       socket.off('game', onGame)
       socket.off('emote', onEmote)
-      socket.off('saved', refresh)
+      socket.off('saved', onSaved)
       socket.off('online', setOnline)
     }
   }, [refresh])
@@ -96,13 +104,14 @@ export function App() {
 
   let body
   if (page === '/partie' && view)
-    body = <Game v={view} skins={skins} layout={me?.layout ?? DEFAULT_LAYOUT} sound={settings.sound} hints={settings.hints} emote={emote} onLeave={leaveGame} />
+    body = <Game v={view} skins={skins} layout={me?.layout ?? DEFAULT_LAYOUT} sound={settings.sound} hints={settings.hints} emote={emote} onLeave={leaveGame} savedId={savedId} />
   else if (page === '/jouer') body = <Play me={me} view={view} />
   else if (page === '/classements') body = <Leaderboards me={me} />
   else if (page === '/perso') body = <Customize me={me} setMe={setMe} />
   else if (page === '/compte') body = <Account me={me} setMe={setMe} googleClientId={googleClientId} />
   else if (page === '/regles') body = <Rules />
   else if (page === '/tutoriel') body = <Tutorial skins={skins} loggedIn={!!me} />
+  else if (page.startsWith('/replay/')) body = <Replay id={Number(page.slice(8))} skins={skins} />
   else body = <Home me={me} online={online} view={view} skins={skins} />
 
   return (
@@ -299,6 +308,7 @@ function Home({ me, online, view, skins }: { me: Profile | null; online: Online;
             <div><b>{st.wins}</b>victoires</div>
             <div><b>{st.uncaught_bluffs}</b>bluffs réussis</div>
           </div>
+          <DailyQuests daily={me.daily} />
         </section>
       )}
 
@@ -339,6 +349,7 @@ const NeedLogin = () => (
 
 function Play({ me, view }: { me: Profile | null; view: GameView | null }) {
   const [minutes, setMinutes] = useState(5)
+  const [level, setLevel] = useState('normal')
   const [waiting, setWaiting] = useState(false)
   const [code, setCode] = useState('')
   const [join, setJoin] = useState('')
@@ -383,7 +394,12 @@ function Play({ me, view }: { me: Profile | null; view: GameView | null }) {
             <span className="how-icon" aria-hidden="true">🤖</span>
             <h3>Entraînement</h3>
             <p className="muted">Contre Bluffbot, qui bluffe et conteste aussi. Ne compte ni pour l'Elo ni pour les quêtes.</p>
-            <button onClick={() => call('bot:start', { minutes }).catch(fail)}>Jouer contre le bot</button>
+            <div className="row segmented small-seg" role="radiogroup" aria-label="Niveau du bot">
+              {['facile', 'normal', 'difficile'].map((l) => (
+                <button key={l} role="radio" aria-checked={l === level} className={l === level ? 'on' : ''} onClick={() => setLevel(l)}>{l[0].toUpperCase() + l.slice(1)}</button>
+              ))}
+            </div>
+            <button onClick={() => call('bot:start', { minutes, level }).catch(fail)}>Jouer contre le bot</button>
           </section>
           <section className="card mode">
             <span className="how-icon" aria-hidden="true">🤝</span>
@@ -402,7 +418,7 @@ function Play({ me, view }: { me: Profile | null; view: GameView | null }) {
   )
 }
 
-const BOARD_TABS: Record<string, string> = { elo: 'Elo', week: 'Semaine', wins: 'Victoires', bluff: 'Bluffeurs', detect: 'Détecteurs' }
+const BOARD_TABS: Record<string, string> = { elo: 'Elo', season: 'Saison', week: 'Semaine', wins: 'Victoires', bluff: 'Bluffeurs', detect: 'Détecteurs' }
 function Leaderboards({ me }: { me: Profile | null }) {
   const [kind, setKind] = useState('elo')
   const [rows, setRows] = useState<{ name: string; value: number }[] | null>(null)
@@ -413,6 +429,8 @@ function Leaderboards({ me }: { me: Profile | null }) {
   return (
     <main className="page">
       <h1>Classements</h1>
+      {kind === 'season' && me && <p className="muted season">🏆 {me.season.label} · se termine dans {Math.max(1, Math.ceil((me.season.end - Date.now()) / 86_400_000))} jour(s)</p>}
+      {kind === 'season' && !me && <p className="muted season">🏆 Score cumulé ce mois-ci : le compteur repart à zéro le 1er du mois.</p>}
       <div className="row tabs segmented" role="tablist">
         {Object.entries(BOARD_TABS).map(([k, l]) => <button key={k} role="tab" aria-selected={k === kind} className={k === kind ? 'on' : ''} onClick={() => setKind(k)}>{l}</button>)}
       </div>
@@ -507,7 +525,9 @@ function Customize({ me, setMe }: { me: Profile | null; setMe: (p: Profile) => v
       <h2>Plateau</h2>
       <div className="skins">{Object.entries(BOARD_SKINS).map(([k, l]) => tile('board', k, l))}</div>
       {err && <p className="warn">{err}</p>}
-      <h2>Quêtes</h2>
+      <h2>Quêtes du jour</h2>
+      <div className="card"><DailyQuests daily={me.daily} /></div>
+      <h2>Succès</h2>
       <ul className="card quests">
         {QUESTS.map((q) => {
           const n = Math.min(me.stats[q.stat] ?? 0, q.goal)
@@ -611,7 +631,7 @@ function AuthForm({ setMe, googleClientId }: { setMe: (p: Profile) => void; goog
 }
 
 type History = {
-  games: { won: number; score: number; elo_before: number; elo_after: number; ended_at: number; opponent: string; reason: string; ranked: number }[]
+  games: { game_id: number; replayable: number; won: number; score: number; elo_before: number; elo_after: number; ended_at: number; opponent: string; reason: string; ranked: number }[]
   rivals: { name: string; games: number; wins: number }[]
 }
 const dateFmt = new Intl.DateTimeFormat('fr-BE', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })
@@ -631,6 +651,7 @@ function Account({ me, setMe, googleClientId }: { me: Profile | null; setMe: (p:
       </main>
     )
   const st = me.stats, xpNext = 100 * me.level ** 2, xpPrev = 100 * (me.level - 1) ** 2
+  const refreshMe = () => call<{ profile: Profile }>('me').then((r) => setMe(r.profile)).catch(() => {})
   const logout = () => call('logout', { token: getToken() }).finally(() => {
     saveToken(null)
     setMe(null)
@@ -664,6 +685,7 @@ function Account({ me, setMe, googleClientId }: { me: Profile | null; setMe: (p:
               <span className="rank-n">{g.won ? '✅' : '❌'}</span>
               <span className="rank-name">vs {g.opponent} <small className="muted">· {g.reason} · {dateFmt.format(g.ended_at)}</small></span>
               <b>{g.score} pts{g.ranked ? ` · ${g.elo_after - g.elo_before >= 0 ? '+' : ''}${g.elo_after - g.elo_before}` : ''}</b>
+              {!!g.replayable && <a className="btn small" href={`#/replay/${g.game_id}`}>Revoir</a>}
             </li>
           ))}
           {h && !h.games.length && <p className="muted">Aucune partie jouée pour l'instant.</p>}
@@ -679,16 +701,71 @@ function Account({ me, setMe, googleClientId }: { me: Profile | null; setMe: (p:
       </section>
       <form className="card auth" onSubmit={(e) => {
         e.preventDefault()
-        call('password', pw).then(() => setMsg('Mot de passe changé ✓')).catch((e: Error) => setMsg(e.message))
+        call('password', pw).then(() => { setMsg('Mot de passe enregistré ✓'); refreshMe() }).catch((e: Error) => setMsg(e.message))
       }}>
-        <h3>Changer de mot de passe</h3>
-        <label>Ancien<input type="password" name="old" value={pw.old} onChange={(e) => setPw({ ...pw, old: e.target.value })} autoComplete="current-password" required /></label>
+        <h3>{me.hasPassword ? 'Changer de mot de passe' : 'Créer un mot de passe'}</h3>
+        {!me.hasPassword && <p className="muted">Ton compte utilise Google. Un mot de passe te permet aussi de te connecter avec ton pseudo.</p>}
+        {me.hasPassword && <label>Ancien<input type="password" name="old" value={pw.old} onChange={(e) => setPw({ ...pw, old: e.target.value })} autoComplete="current-password" required /></label>}
         <label>Nouveau<input type="password" name="new" value={pw.new} onChange={(e) => setPw({ ...pw, new: e.target.value })} autoComplete="new-password" required /></label>
         <button type="submit">Changer</button>
         {msg && <p className="muted" role="status">{msg}</p>}
       </form>
+      {googleClientId && (
+        <section className="card">
+          <h3>Connexion Google</h3>
+          {me.google ? (
+            <p className="success">Ton compte est relié à Google ✓</p>
+          ) : (
+            <>
+              <p className="muted">Relie ton compte Google pour te connecter en un clic.</p>
+              <GoogleButton clientId={googleClientId} onCredential={(credential) => call<Profile>('google:link', { credential }).then(setMe).catch((e: Error) => setMsg(e.message))} />
+            </>
+          )}
+        </section>
+      )}
       <button className="danger ghost-btn" onClick={logout}>Se déconnecter</button>
     </main>
+  )
+}
+
+/** Today's three quests; they change every day at midnight (UTC). */
+function DailyQuests({ daily }: { daily: Profile['daily'] }) {
+  const hours = Math.max(1, Math.ceil((daily.resetAt - Date.now()) / 3_600_000))
+  return (
+    <div className="daily">
+      <div className="daily-head"><h3>Quêtes du jour</h3><small className="muted">nouvelles dans {hours} h</small></div>
+      <ul className="quests">
+        {daily.quests.map((q) => (
+          <li key={q.id} className={q.done ? 'done' : ''}>
+            <span>{q.label} <small className="xp">+{q.xp} XP</small></span>
+            <progress max={q.goal} value={q.progress} aria-label={q.label} />
+            <small>{q.progress}/{q.goal}{q.done ? ' ✓' : ''}</small>
+          </li>
+        ))}
+      </ul>
+    </div>
+  )
+}
+
+// Browsers fire this once when the site can be installed; keep it for the settings button.
+let installPrompt: (Event & { prompt: () => Promise<void> }) | null = null
+addEventListener('beforeinstallprompt', (e) => {
+  e.preventDefault()
+  installPrompt = e as typeof installPrompt
+})
+function InstallApp() {
+  const [can, setCan] = useState(!!installPrompt)
+  const standalone = matchMedia('(display-mode: standalone)').matches
+  if (standalone) return null
+  return (
+    <>
+      <h3>Application</h3>
+      {can ? (
+        <button className="primary" onClick={() => installPrompt?.prompt().then(() => { installPrompt = null; setCan(false) })}>📲 Installer Bluff Gambit</button>
+      ) : (
+        <p className="muted">Pour l’installer : menu du navigateur → « Ajouter à l’écran d’accueil » (ou « Installer l’application » sur PC).</p>
+      )}
+    </>
   )
 }
 
@@ -713,6 +790,7 @@ function SettingsModal({ s, set, close }: { s: Settings; set: (s: Settings) => v
             </button>
           ))}
         </div>
+        <InstallApp />
         <h3>Partie</h3>
         <label className="check"><input type="checkbox" checked={s.hints} onChange={(e) => set({ ...s, hints: e.target.checked })} /> Afficher les coups possibles</label>
         <label className="check"><input type="checkbox" checked={s.sound} onChange={(e) => set({ ...s, sound: e.target.checked })} /> Sons</label>

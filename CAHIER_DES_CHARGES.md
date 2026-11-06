@@ -82,4 +82,4 @@ Roque, prise en passant, échec, pat, règle des 50 coups.
 - Une seule commande en dev (`npm run dev`, port 3000, Vite en middleware).
 
 ## Plus tard
-Niveaux de difficulté du bot, replay coup par coup, quêtes quotidiennes, saisons, PWA installable, spectateurs, hébergement (Railway / Fly.io).
+Spectateurs, récompenses de fin de saison.
