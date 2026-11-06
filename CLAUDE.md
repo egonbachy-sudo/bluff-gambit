@@ -13,7 +13,7 @@
 - `server/bot.ts` : Bluffbot (entraînement) ; ne décide qu'à partir de `view()` de son camp, garde en mémoire les types encore possibles de chaque pièce adverse
 - `server/game.ts` : machine d'état pure (setup → move → challenge → … → over), `view()` filtre ce que chaque joueur voit
 - `server/index.ts` : Socket.IO, comptes, matchmaking, pendules, fin de partie → SQLite
-- `server/db.ts` : schéma SQLite (`data/bluff.db`, `node:sqlite`)
+- `server/db.ts` : schéma + accès SQLite via libSQL (`data/bluff.db` en local, Turso en ligne si `TURSO_DATABASE_URL` est défini)
 - `client/` : React (App.tsx = pages, Game.tsx = plateau, Tutorial.tsx = tutoriel scripté en 8 étapes, local, sans serveur)
 
 ## Règle d'or
@@ -24,4 +24,7 @@ Deux onglets, sans cocher « Rester connecté » (le jeton est alors stocké par
 
 ## Avancement
 - Fait : règles, comptes, parties classées et privées, pendules, contestation, marquage, promotion, score, Elo, classements, quêtes, skins, thèmes, paramètres, règles, emotes, historique, face-à-face, Bluffbot (entraînement, partie non sauvegardée), tutoriel interactif
-- À faire : niveaux du bot, replay coup par coup, quêtes quotidiennes, PWA, hébergement
+- À faire : niveaux du bot, replay coup par coup, quêtes quotidiennes, PWA
+
+## Mise en ligne
+Render (gratuit, `render.yaml` + `Dockerfile`) + Turso (base gratuite). Marche à suivre : `DEPLOIEMENT.md`. Production : `npm run build` puis `npm start` (`--prod` sert `client/dist`).
