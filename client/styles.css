@@ -123,11 +123,21 @@ progress::-moz-progress-bar { background: linear-gradient(90deg, var(--accent), 
 .account-text { display: grid; line-height: 1.15; min-width: 0; }
 .account-text b { font-size: 0.92rem; max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .account-text small { color: var(--muted); font-size: 0.75rem; }
+/* Round profile picture: an emoji or the player's initial, always centred in a true circle. */
 .avatar {
-  width: 34px; height: 34px; border-radius: 50%; display: inline-grid; place-items: center; flex: none;
-  background: linear-gradient(135deg, var(--accent), var(--accent-2)); color: var(--accent-text); font: 800 1rem var(--display);
+  --s: 34px; position: relative; flex: 0 0 var(--s); width: var(--s); height: var(--s); aspect-ratio: 1; border-radius: 50%;
+  display: inline-flex; align-items: center; justify-content: center; overflow: hidden;
+  background: linear-gradient(135deg, var(--accent), var(--accent-2)); color: var(--accent-text);
 }
-.avatar.big { width: 56px; height: 56px; font-size: 1.5rem; }
+.avatar-in { display: block; line-height: 1; text-align: center; font: 800 calc(var(--s) * 0.46) / 1 system-ui, sans-serif; transform: translateY(0.02em); }
+.avatar.pic { background: radial-gradient(circle at 35% 30%, var(--surface-3), var(--surface-2)); box-shadow: inset 0 0 0 1.5px var(--border); }
+.avatar.pic .avatar-in { font-size: calc(var(--s) * 0.6); font-family: 'Segoe UI Emoji', 'Apple Color Emoji', 'Noto Color Emoji', sans-serif; }
+.avatar.special { overflow: visible; background: radial-gradient(circle at 35% 30%, color-mix(in srgb, var(--accent) 35%, var(--surface-2)), var(--surface)); box-shadow: none; }
+.avatar.special::before {
+  content: ''; position: absolute; inset: -3px; border-radius: 50%; z-index: -1;
+  background: conic-gradient(from 0deg, var(--accent), var(--accent-2), #ffd76a, var(--accent));
+  animation: spin 4s linear infinite;
+}
 .pulse { animation: pulse 2s ease-in-out infinite; }
 .page-anim { animation: page-in 0.35s var(--ease) both; }
 .page { max-width: 720px; margin: 0 auto; }
@@ -299,7 +309,6 @@ progress::-moz-progress-bar { background: linear-gradient(90deg, var(--accent), 
 .who { position: relative; display: flex; align-items: center; gap: 8px; min-width: 0; }
 .who b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .who small { color: var(--muted); }
-.who .avatar { width: 28px; height: 28px; font-size: 0.85rem; }
 .lives { color: var(--danger); font-weight: 800; display: flex; align-items: center; gap: 4px; }
 .heart { display: inline-block; animation: heart 0.5s var(--ease); }
 .clock { font: 700 1.15rem ui-monospace, monospace; background: var(--surface-2); padding: 3px 9px; border-radius: 7px; transition: color 0.2s, background-color 0.2s; }
@@ -503,3 +512,17 @@ progress::-moz-progress-bar { background: linear-gradient(90deg, var(--accent), 
   .bar { padding: 6px 10px; gap: 4px 8px; }
   .page h1 { margin-top: 0.2em; }
 }
+
+/* ================= profile pictures ================= */
+.avatar-head { display: flex; align-items: center; gap: 16px; margin-bottom: 12px; }
+.avatar-head h3, .avatar-head p { margin: 0; }
+.avatar-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(56px, 1fr)); gap: 8px; margin-bottom: 14px; }
+.avatar-grid.rare { grid-template-columns: repeat(auto-fill, minmax(118px, 1fr)); }
+.avatar-opt { padding: 6px; min-height: 0; border-radius: 14px; flex-direction: column; gap: 4px; isolation: isolate; }
+.avatar-opt.rare small { font-size: 0.7rem; color: var(--muted); text-align: center; }
+.avatar-opt.locked { filter: grayscale(0.9); }
+.avatar-opt.locked .avatar.special::before { animation: none; }
+.avatar-opt:hover:not(:disabled) .avatar { transform: scale(1.08); }
+.avatar-opt .avatar { transition: transform 0.2s var(--ease); }
+.ranking li .avatar { margin-right: -2px; }
+.account .avatar, .welcome-head .avatar, .who .avatar { isolation: isolate; }

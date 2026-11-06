@@ -112,7 +112,8 @@ export function nameError(name: unknown): string | null {
 }
 
 export const levelOf = (xp: number) => Math.floor(Math.sqrt(xp / 100)) + 1
-export const TIME_CONTROLS = [3, 5, 10, 20]
+/** Minutes per player; 0 means no clock at all. */
+export const TIME_CONTROLS = [3, 5, 10, 20, 0]
 export const CHALLENGE_SECONDS = 10
 export const EMOTES = ['👍', '😮', '😂', '🤔', '😈', '😅', '🔥', '🤝']
 export const PIECE_SKINS: Record<string, string> = { classique: 'Classique', contour: 'Contour', lettres: 'Lettres', neon: 'Néon', or: 'Or' }
@@ -126,7 +127,29 @@ export const QUESTS = [
   { id: 'bluff15', label: 'Réussir 15 bluffs jamais démasqués', stat: 'uncaught_bluffs', goal: 15, reward: 'pieces:neon' },
   { id: 'flawless', label: 'Gagner une partie avec tes 10 vies', stat: 'best_lives', goal: 10, reward: 'board:amethyste' },
   { id: 'win15', label: 'Gagner 15 parties', stat: 'wins', goal: 15, reward: 'pieces:or' },
+  { id: 'play10', label: 'Jouer 10 parties', stat: 'games', goal: 10, reward: 'avatar:masque' },
+  { id: 'bluff25', label: 'Réussir 25 bluffs jamais démasqués', stat: 'uncaught_bluffs', goal: 25, reward: 'avatar:joker' },
+  { id: 'detect25', label: 'Réussir 25 contestations', stat: 'correct_challenges', goal: 25, reward: 'avatar:oeil' },
+  { id: 'marks40', label: 'Faire 40 marquages justes', stat: 'correct_marks', goal: 40, reward: 'avatar:diamant' },
+  { id: 'win30', label: 'Gagner 30 parties', stat: 'wins', goal: 30, reward: 'avatar:couronne' },
+  { id: 'play50', label: 'Jouer 50 parties', stat: 'games', goal: 50, reward: 'avatar:dragon' },
 ]
+
+/** Profile pictures: "b:<n>" for the 20 free ones, "s:<key>" for the ones unlocked by quests. */
+export const AVATARS_BASE = ['🦊', '🐺', '🐱', '🐼', '🦁', '🐯', '🐸', '🐵', '🦉', '🐙', '🐧', '🐨', '🦖', '🐝', '👻', '🤖', '🎃', '😎', '🧙', '🥷']
+export const AVATARS_SPECIAL: Record<string, { emoji: string; label: string }> = {
+  masque: { emoji: '🎭', label: 'Masque' }, joker: { emoji: '🃏', label: 'Joker' }, oeil: { emoji: '👁️', label: 'Œil' },
+  diamant: { emoji: '💎', label: 'Diamant' }, couronne: { emoji: '👑', label: 'Couronne' }, dragon: { emoji: '🐉', label: 'Dragon' },
+}
+export function avatarOf(id: unknown): { emoji: string; special: boolean; key: string } | null {
+  if (typeof id !== 'string') return null
+  if (id.startsWith('b:')) {
+    const e = AVATARS_BASE[Number(id.slice(2))]
+    return e ? { emoji: e, special: false, key: id.slice(2) } : null
+  }
+  const s = id.startsWith('s:') ? AVATARS_SPECIAL[id.slice(2)] : undefined
+  return s ? { emoji: s.emoji, special: true, key: id.slice(2) } : null
+}
 
 // ---------- daily quests & seasons ----------
 export const DAILY_POOL = [

@@ -3,15 +3,15 @@ import type { FormEvent } from 'react'
 import { call, getToken, saveToken, socket } from './net.ts'
 import { Game } from './Game.tsx'
 import type { GameView } from './Game.tsx'
-import { Board, PieceIcon, reducedMotion } from './Board.tsx'
+import { Avatar, Board, PieceIcon, reducedMotion } from './Board.tsx'
 import type { BoardPiece, Skins } from './Board.tsx'
 import { Tutorial } from './Tutorial.tsx'
 import { Replay } from './Replay.tsx'
-import { layoutError, levelOf, placementLayout, randomSetup, BOARD_SKINS, DEFAULT_LAYOUT, KINDS, NAMES, PIECE_SKINS, QUESTS, TIME_CONTROLS } from '../shared/rules.ts'
+import { avatarOf, layoutError, levelOf, placementLayout, randomSetup, AVATARS_BASE, AVATARS_SPECIAL, BOARD_SKINS, DEFAULT_LAYOUT, KINDS, NAMES, PIECE_SKINS, QUESTS, TIME_CONTROLS } from '../shared/rules.ts'
 import type { Kind, Sq } from '../shared/rules.ts'
 
 type Profile = {
-  id: number; name: string; email: string; elo: number; piece_skin: string; board_skin: string; layout: string
+  id: number; name: string; email: string; elo: number; piece_skin: string; board_skin: string; layout: string; avatar: string | null
   stats: Record<string, number>; level: number; unlocked: string[]; inGame: boolean; google: boolean; hasPassword: boolean
   daily: { quests: { id: string; label: string; goal: number; progress: number; done: boolean; xp: number }[]; resetAt: number }
   season: { label: string; start: number; end: number }
@@ -131,7 +131,7 @@ export function App() {
           <button className={`icon-btn ${settingsOpen ? 'open' : ''}`} aria-label="Paramètres" aria-expanded={settingsOpen} onClick={() => setSettingsOpen(!settingsOpen)}>⚙</button>
           {me ? (
             <a href="#/compte" className={`account ${page === '/compte' ? 'current' : ''}`}>
-              <span className="avatar" aria-hidden="true">{me.name[0]?.toUpperCase()}</span>
+              <Avatar id={me.avatar} name={me.name} />
               <span className="account-text"><b>{me.name}</b><small>Mon compte · Niv. {me.level}</small></span>
             </a>
           ) : (
@@ -300,7 +300,7 @@ function Home({ me, online, view, skins }: { me: Profile | null; online: Online;
       {me && st && (
         <section className="card welcome">
           <div className="welcome-head">
-            <span className="avatar big" aria-hidden="true">{me.name[0]?.toUpperCase()}</span>
+            <Avatar id={me.avatar} name={me.name} size={56} />
             <div>
               <h2>Bon retour, {me.name} !</h2>
               <p className="muted">Niveau {me.level} · {st.xp} XP</p>
@@ -376,14 +376,14 @@ function Play({ me, view }: { me: Profile | null; view: GameView | null }) {
         <h3>Temps par joueur</h3>
         <div className="row segmented">
           {TIME_CONTROLS.map((m) => (
-            <button key={m} className={m === minutes ? 'on' : ''} disabled={waiting || !!code} onClick={() => setMinutes(m)}>{m} min</button>
+            <button key={m} className={m === minutes ? 'on' : ''} disabled={waiting || !!code} onClick={() => setMinutes(m)}>{m ? `${m} min` : '∞ Illimité'}</button>
           ))}
         </div>
       </section>
       {waiting || code ? (
         <section className="card searching">
           <span className="spinner" aria-hidden="true" />
-          {waiting && <p>Recherche d'un adversaire ({minutes} min)…</p>}
+          {waiting && <p>Recherche d'un adversaire ({minutes ? `${minutes} min` : 'temps illimité'})…</p>}
           {code && <p>Code de ta partie privée : <b className="code" translate="no">{code}</b><br />Donne-le à ton ami.</p>}
           <button onClick={cancel}>Annuler</button>
         </section>
@@ -426,7 +426,7 @@ function Play({ me, view }: { me: Profile | null; view: GameView | null }) {
 const BOARD_TABS: Record<string, string> = { elo: 'Elo', season: 'Saison', week: 'Semaine', wins: 'Victoires', bluff: 'Bluffeurs', detect: 'Détecteurs' }
 function Leaderboards({ me }: { me: Profile | null }) {
   const [kind, setKind] = useState('elo')
-  const [rows, setRows] = useState<{ name: string; value: number }[] | null>(null)
+  const [rows, setRows] = useState<{ name: string; avatar: string | null; value: number }[] | null>(null)
   useEffect(() => {
     setRows(null)
     call('leaderboard', { kind }).then(setRows).catch(() => setRows([]))
@@ -443,6 +443,7 @@ function Leaderboards({ me }: { me: Profile | null }) {
         {rows?.map((r, i) => (
           <li key={r.name} className={r.name === me?.name ? 'me' : ''} style={{ animationDelay: `${i * 30}ms` }}>
             <span className="rank-n">{['🥇', '🥈', '🥉'][i] ?? i + 1}</span>
+            <Avatar id={r.avatar} name={r.name} size={30} />
             <span className="rank-name">{r.name}</span>
             <b>{r.value}</b>
           </li>
@@ -451,6 +452,49 @@ function Leaderboards({ me }: { me: Profile | null }) {
         {!rows && <p className="muted">Chargement…</p>}
       </ol>
     </main>
+  )
+}
+
+function AvatarPicker({ me, setMe }: { me: Profile; setMe: (p: Profile) => void }) {
+  const [err, setErr] = useState('')
+  const pick = (avatar: string) => call<Profile>('avatar', { avatar }).then(setMe).catch((e: Error) => setErr(e.message))
+  const quest = (key: string) => QUESTS.find((q) => q.reward === `avatar:${key}`)
+  const current = avatarOf(me.avatar)
+  return (
+    <section className="card">
+      <div className="avatar-head">
+        <Avatar id={me.avatar} name={me.name} size={64} />
+        <div>
+          <h3>Photo de profil</h3>
+          <p className="muted">{current ? 'Visible dans les parties et les classements.' : 'Pour l’instant, ton initiale s’affiche. Choisis une photo !'}</p>
+        </div>
+      </div>
+      <div className="avatar-grid">
+        {AVATARS_BASE.map((e, i) => {
+          const id = `b:${i}`
+          return (
+            <button key={id} className={`avatar-opt ${me.avatar === id ? 'on' : ''}`} onClick={() => pick(id)} aria-label={`Photo ${e}`} aria-pressed={me.avatar === id}>
+              <Avatar id={id} name={me.name} size={44} />
+            </button>
+          )
+        })}
+      </div>
+      <h3>Photos rares</h3>
+      <div className="avatar-grid rare">
+        {Object.entries(AVATARS_SPECIAL).map(([key, a]) => {
+          const id = `s:${key}`, open = me.unlocked.includes(`avatar:${key}`)
+          return (
+            <button key={id} className={`avatar-opt rare ${me.avatar === id ? 'on' : ''} ${open ? '' : 'locked'}`} disabled={!open} onClick={() => pick(id)}
+              aria-label={`${a.label}${open ? '' : ' (verrouillée)'}`} aria-pressed={me.avatar === id}>
+              <Avatar id={id} name={me.name} size={52} />
+              <b>{a.label}</b>
+              {!open && <small>🔒 {quest(key)?.label}</small>}
+            </button>
+          )
+        })}
+      </div>
+      {err && <p className="warn">{err}</p>}
+    </section>
   )
 }
 
@@ -524,6 +568,7 @@ function Customize({ me, setMe }: { me: Profile | null; setMe: (p: Profile) => v
   return (
     <main className="page wide">
       <h1>Personnalisation</h1>
+      <AvatarPicker me={me} setMe={setMe} />
       <LayoutEditor me={me} setMe={setMe} />
       <h2>Pièces</h2>
       <div className="skins">{Object.entries(PIECE_SKINS).map(([k, l]) => tile('pieces', k, l))}</div>
@@ -666,7 +711,7 @@ function Account({ me, setMe, googleClientId }: { me: Profile | null; setMe: (p:
     <main className="page">
       <section className="card welcome">
         <div className="welcome-head">
-          <span className="avatar big" aria-hidden="true">{me.name[0]?.toUpperCase()}</span>
+          <Avatar id={me.avatar} name={me.name} size={56} />
           <div>
             <h1>{me.name}</h1>
             <p className="muted">Niveau {levelOf(st.xp)} · {st.xp} XP · Elo {me.elo}</p>

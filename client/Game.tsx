@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { beep, call } from './net.ts'
-import { Board, KindPicker, PieceIcon } from './Board.tsx'
+import { Avatar, Board, KindPicker, PieceIcon } from './Board.tsx'
 import type { BoardPiece, Skins } from './Board.tsx'
 import { classicSetup, destinations, homeRows, lastRank, layoutPlacement, opp, randomSetup, setupError, sqName, EMOTES, NAMES } from '../shared/rules.ts'
 import type { Color, Kind, Placement, Sq } from '../shared/rules.ts'
@@ -10,7 +10,7 @@ import type { View } from '../server/game.ts'
 export { PieceIcon, glyph } from './Board.tsx'
 export type { Skins } from './Board.tsx'
 export type GameView = View & {
-  names: Record<Color, string>; elo: Record<Color, number>; ranked: boolean; minutes: number
+  names: Record<Color, string>; avatars?: Record<Color, string | null>; elo: Record<Color, number>; ranked: boolean; minutes: number
   clock: Record<Color, number>; windowLeft: number; setupLeft: number; eloDelta?: Record<Color, number>; at: number
 }
 type Piece = { id: string; owner: Color; x: number; y: number; kind?: Kind; moved?: boolean; claim?: Kind | null }
@@ -38,6 +38,7 @@ export function Game({ v, skins, layout, sound, hints, emote, onLeave, savedId }
   const pieces = v.pieces as Piece[]
   const [sel, setSel] = useState<string | null>(null)
   const [as, setAs] = useState<Kind>('P')
+  const [pickerOpen, setPickerOpen] = useState(false)
   const [marking, setMarking] = useState(false)
   const [markTarget, setMarkTarget] = useState<string | null>(null)
   const [markAsked, setMarkAsked] = useState(false)
@@ -100,8 +101,10 @@ export function Game({ v, skins, layout, sound, hints, emote, onLeave, savedId }
     if (!myTurn || promo) return
     if (p?.owner === me) {
       setMarkAsked(true)
-      setSel(p.id === sel ? null : p.id)
+      if (p.id === sel) return setPickerOpen(!pickerOpen) // touch it again to change the imitated type
+      setSel(p.id)
       setAs(p.kind!)
+      setPickerOpen(true)
       return
     }
     if (selected && dests.some((d) => d.x === x && d.y === y)) {
@@ -117,12 +120,12 @@ export function Game({ v, skins, layout, sound, hints, emote, onLeave, savedId }
     return (
       <div className={`bar ${active ? 'active' : ''}`}>
         <div className="who">
-          <span className="avatar" aria-hidden="true">{v.names[c][0]?.toUpperCase()}</span>
+          <Avatar id={v.avatars?.[c]} name={v.names[c]} size={30} />
           <b>{v.names[c]}</b> <small>{v.elo[c]}</small>
           {c === foe && emote && <span className="bubble" role="status">{emote}</span>}
         </div>
         <div className="lives" aria-label={`${v.lives[c]} vies`}><span key={v.lives[c]} className="heart">❤</span> {v.lives[c]}</div>
-        <div className={`clock ${active && ms < 30_000 ? 'low' : ''}`}>{fmt(ms)}</div>
+        <div className={`clock ${v.minutes && active && ms < 30_000 ? 'low' : ''}`}>{v.minutes ? fmt(ms) : '∞'}</div>
         <div className="grave" ref={(el) => { graves.current[c] = el }}>
           {v.captured[c].map((k, i) => <PieceIcon key={i} kind={k} owner={c} skin={skins.pieces} />)}
         </div>
@@ -160,13 +163,13 @@ export function Game({ v, skins, layout, sound, hints, emote, onLeave, savedId }
         </>
       ),
     }
-  else if (selected && myTurn)
+  else if (selected && myTurn && pickerOpen)
     popover = {
       at: selected,
       content: (
         <>
           <p className="pop-title">Jouer comme…</p>
-          <KindPicker owner={me} skin={skins.pieces} cur={as} real={selected.kind} onPick={setAs} />
+          <KindPicker owner={me} skin={skins.pieces} cur={as} real={selected.kind} onPick={(k) => { setAs(k); setPickerOpen(false) }} />
         </>
       ),
     }
@@ -220,7 +223,7 @@ export function Game({ v, skins, layout, sound, hints, emote, onLeave, savedId }
     controls = (
       <>
         <p className="your-turn">
-          {marking ? 'Touche une pièce adverse à marquer.' : selected ? 'Choisis au-dessus de ta pièce ce qu’elle imite, puis touche une case.' : 'À toi de jouer : touche une de tes pièces.'}
+          {marking ? 'Touche une pièce adverse à marquer.' : selected ? (pickerOpen ? 'Choisis ce que ta pièce imite.' : `Jouée comme ${NAMES[as].toLowerCase()} : touche une case en surbrillance (ou ta pièce pour changer).`) : 'À toi de jouer : touche une de tes pièces.'}
         </p>
         <div className="row">
           {marking && <button onClick={() => { setMarking(false); setMarkTarget(null) }}>Annuler le marquage</button>}

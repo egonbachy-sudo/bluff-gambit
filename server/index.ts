@@ -7,7 +7,7 @@ import { all, get, run } from './db.ts'
 import type { Row } from './db.ts'
 import * as G from './game.ts'
 import * as Bot from './bot.ts'
-import { dailyQuests, dayKey, seasonOf, nameError, layoutError, layoutPlacement, opp, randomSetup, levelOf, DEFAULT_LAYOUT, CHALLENGE_SECONDS, DEFAULT_UNLOCKS, EMOTES, QUESTS, TIME_CONTROLS } from '../shared/rules.ts'
+import { avatarOf, dailyQuests, dayKey, seasonOf, nameError, layoutError, layoutPlacement, opp, randomSetup, levelOf, DEFAULT_LAYOUT, CHALLENGE_SECONDS, DEFAULT_UNLOCKS, EMOTES, QUESTS, TIME_CONTROLS } from '../shared/rules.ts'
 import type { Color } from '../shared/rules.ts'
 
 const PORT = Number(process.env.PORT ?? 3000)
@@ -86,7 +86,7 @@ async function daily(id: number) {
 }
 const unlockedOf = (st: Row) => [...DEFAULT_UNLOCKS, ...QUESTS.filter((q) => st[q.stat] >= q.goal).map((q) => q.reward)]
 async function profile(id: number) {
-  const u = (await get('SELECT id, name, email, elo, piece_skin, board_skin, layout, google_sub, hash FROM users WHERE id = ?', id))!
+  const u = (await get('SELECT id, name, email, elo, piece_skin, board_skin, layout, avatar, google_sub, hash FROM users WHERE id = ?', id))!
   const dq = await daily(id) // first: it may grant XP that stats() then counts
   const st = await stats(id)
   const { google_sub, hash, ...pub } = u
@@ -106,6 +106,7 @@ type Room = {
   players: Record<Color, number>; names: Record<Color, string>; elo: Record<Color, number>
   ranked: boolean; minutes: number; g: G.Game; clock: Record<Color, number>; since: number
   layouts: Record<Color, string>
+  avatars: Record<Color, string | null>
   timer?: NodeJS.Timeout; windowEnd?: number; setupEnd: number; eloDelta?: Record<Color, number>; done?: boolean
   bot?: Color; mem?: Bot.Mem; botTimer?: NodeJS.Timeout
 }
@@ -145,11 +146,12 @@ async function startRoom(a: number, b: number, minutes: number, ranked: boolean,
   leaveQueues(b)
   starting.add(a).add(b)
   const [w, bl] = Math.random() < 0.5 ? [a, b] : [b, a]
-  const user = (id: number) => get('SELECT name, elo, layout FROM users WHERE id = ?', id) as Promise<Row>
+  const user = (id: number) => get('SELECT name, elo, layout, avatar FROM users WHERE id = ?', id) as Promise<Row>
   const [uw, ub] = await Promise.all([user(w), user(bl)]).finally(() => { starting.delete(a); starting.delete(b) })
   const room: Room = {
     players: { w, b: bl }, names: { w: uw.name, b: ub.name }, elo: { w: uw.elo, b: ub.elo },
     layouts: { w: uw.layout ?? DEFAULT_LAYOUT, b: ub.layout ?? DEFAULT_LAYOUT },
+    avatars: { w: w === BOT_ID ? 'b:15' : uw.avatar, b: bl === BOT_ID ? 'b:15' : ub.avatar },
     ranked, minutes, g: G.newGame(), clock: { w: minutes * 60_000, b: minutes * 60_000 },
     since: Date.now(), setupEnd: Date.now() + SETUP_MS,
   }
@@ -166,7 +168,7 @@ const running = (r: Room) => r.g.phase === 'move' || r.g.phase === 'challenge'
 /** Bills the elapsed time to the side that has to act. */
 function charge(r: Room) {
   const now = Date.now()
-  if (running(r)) r.clock[r.g.turn] -= now - r.since
+  if (running(r) && r.minutes) r.clock[r.g.turn] -= now - r.since
   r.since = now
 }
 
@@ -182,11 +184,11 @@ function schedule(r: Room) {
     }, r.setupEnd - now)
     return
   }
-  const left = r.clock[g.turn]
+  const left = r.minutes ? r.clock[g.turn] : Infinity // 0 minutes = untimed game
   if (g.phase === 'challenge' && CHALLENGE_SECONDS * 1000 < left) {
     r.windowEnd = now + CHALLENGE_SECONDS * 1000
     r.timer = setTimeout(() => { charge(r); G.challenge(g, g.turn, false); after(r) }, CHALLENGE_SECONDS * 1000)
-  } else r.timer = setTimeout(() => { charge(r); G.timeout(g, g.turn); after(r) }, Math.max(0, left))
+  } else if (r.minutes) r.timer = setTimeout(() => { charge(r); G.timeout(g, g.turn); after(r) }, Math.max(0, left))
 }
 
 function after(r: Room) {
@@ -222,7 +224,7 @@ function botTurn(r: Room) {
 
 function act(r: Room, fn: () => string | null) {
   charge(r)
-  if (running(r) && r.clock[r.g.turn] <= 0) {
+  if (running(r) && r.minutes && r.clock[r.g.turn] <= 0) {
     G.timeout(r.g, r.g.turn)
     after(r)
     throw new Error('Temps écoulé')
@@ -238,7 +240,7 @@ function send(r: Room) {
   if (running(r)) clock[r.g.turn] -= elapsed
   for (const c of ['w', 'b'] as Color[])
     io.to(`u${r.players[c]}`).emit('game', {
-      ...G.view(r.g, c), names: r.names, elo: r.elo, ranked: r.ranked, minutes: r.minutes, clock,
+      ...G.view(r.g, c), names: r.names, avatars: r.avatars, elo: r.elo, ranked: r.ranked, minutes: r.minutes, clock,
       windowLeft: r.windowEnd ? r.windowEnd - now : 0,
       setupLeft: r.g.phase === 'setup' ? r.setupEnd - now : 0,
       eloDelta: r.eloDelta,
@@ -273,10 +275,10 @@ function finish(r: Room) {
 }
 
 // ---------- leaderboards ----------
-const sumBoard = (col: string) => `SELECT u.name, SUM(g.${col}) value FROM game_players g JOIN users u ON u.id = g.user_id
+const sumBoard = (col: string) => `SELECT u.name, u.avatar, SUM(g.${col}) value FROM game_players g JOIN users u ON u.id = g.user_id
   WHERE g.ended_at > ? GROUP BY u.id HAVING value > 0 ORDER BY value DESC LIMIT 50`
 const BOARDS: Record<string, string> = {
-  elo: `SELECT name, elo value FROM users WHERE ? >= 0 AND EXISTS (SELECT 1 FROM game_players g WHERE g.user_id = users.id) ORDER BY elo DESC LIMIT 50`,
+  elo: `SELECT name, avatar, elo value FROM users WHERE ? >= 0 AND EXISTS (SELECT 1 FROM game_players g WHERE g.user_id = users.id) ORDER BY elo DESC LIMIT 50`,
   week: sumBoard('score'), season: sumBoard('score'), wins: sumBoard('won'), bluff: sumBoard('uncaught_bluffs'), detect: sumBoard('correct_challenges'),
 }
 
@@ -421,6 +423,14 @@ io.on('connection', (socket) => {
     if (u.hash !== '!' && (typeof d.old !== 'string' || !checkPw(d.old, u.hash))) throw new Error('Ancien mot de passe incorrect')
     if (typeof d.new !== 'string' || d.new.length < 8) throw new Error('Mot de passe : 8 caractères minimum')
     await run('UPDATE users SET hash = ? WHERE id = ?', hashPw(d.new), id)
+  })
+
+  on('avatar', async (d, id) => {
+    const a = avatarOf(d.avatar)
+    if (!a) throw new Error('Photo inconnue')
+    if (a.special && !unlockedOf(await stats(id)).includes(`avatar:${a.key}`)) throw new Error('Photo pas encore débloquée')
+    await run('UPDATE users SET avatar = ? WHERE id = ?', d.avatar, id)
+    return profile(id)
   })
 
   on('skin', async (d, id) => {

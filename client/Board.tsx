@@ -1,7 +1,7 @@
 // Shared animated board: squares handle clicks, pieces live in a layer above and glide between squares.
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { CSSProperties, ReactNode } from 'react'
-import { KINDS, LETTER, NAMES } from '../shared/rules.ts'
+import { avatarOf, KINDS, LETTER, NAMES } from '../shared/rules.ts'
 import type { Color, Kind, Sq } from '../shared/rules.ts'
 
 export type Skins = { pieces: string; board: string }
@@ -13,6 +13,16 @@ export const glyph = (k: Kind, skin: string) => (skin === 'lettres' ? LETTER[k] 
 
 export function PieceIcon({ kind, owner, skin }: { kind: Kind; owner: Color; skin: string }) {
   return <span className={`pc ${owner} skin-${skin}`} aria-label={NAMES[kind]}>{glyph(kind, skin)}</span>
+}
+
+/** Round profile picture; falls back to the player's initial. */
+export function Avatar({ id, name, size = 34 }: { id?: string | null; name: string; size?: number }) {
+  const a = avatarOf(id)
+  return (
+    <span className={`avatar ${a ? 'pic' : ''} ${a?.special ? 'special' : ''}`} style={{ '--s': `${size}px` } as CSSProperties} aria-hidden="true">
+      <span className="avatar-in">{a ? a.emoji : name.trim()[0]?.toUpperCase() ?? '?'}</span>
+    </span>
+  )
 }
 
 export const reducedMotion = () => typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches
@@ -148,7 +158,7 @@ export function Board(props: {
         ))}
       </div>
       {popover && (
-        <div ref={popRef} className={`popover ${popRow < 2 ? 'below' : 'above'}`} style={{ '--row': popRow } as CSSProperties}>
+        <div ref={popRef} className={`popover ${popRow >= 4 ? 'below' : 'above'}`} style={{ '--row': popRow } as CSSProperties}>
           {popover.content}
         </div>
       )}

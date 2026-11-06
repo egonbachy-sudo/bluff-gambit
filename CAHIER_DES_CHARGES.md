@@ -44,7 +44,7 @@ Jeu d'échecs à information cachée et à bluff, en ligne (mobile + PC), serveu
 - Fins possibles : roi capturé, 0 vie, abandon, temps écoulé.
 - Deux rois seuls sur le plateau (une fois la dernière prise confirmée, sans contestation gagnante) : la partie s'arrête, le joueur avec le plus de vies gagne ; à égalité, celui dont la prise a laissé les rois seuls.
 - Pas de règle des 50 coups.
-- Temps par joueur choisi par l'hôte de la partie : 3, 5, 10 ou 20 minutes.
+- Temps par joueur choisi par l'hôte de la partie : 3, 5, 10, 20 minutes ou illimité (pas de pendule ; la fenêtre de contestation de 10 s reste).
 
 ### Retiré du jeu classique
 Roque, prise en passant, échec, pat, règle des 50 coups.

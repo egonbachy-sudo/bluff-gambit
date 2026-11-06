@@ -3,7 +3,7 @@
 import { useState } from 'react'
 import type { ReactNode } from 'react'
 import { call } from './net.ts'
-import { Board, KindPicker, PieceIcon } from './Board.tsx'
+import { Avatar, Board, KindPicker, PieceIcon } from './Board.tsx'
 import type { Skins } from './Board.tsx'
 import { canMove, destinations, lastRank, setupError } from '../shared/rules.ts'
 import type { Color, Kind, Sq } from '../shared/rules.ts'
@@ -112,7 +112,7 @@ const STEPS: Step[] = [
       'Tu perds 1 vie quand ton bluff est démasqué, ou quand tu contestes à tort.',
       'La partie se termine si un roi est pris, si un joueur n’a plus de vies, si sa pendule tombe à zéro, ou s’il abandonne.',
       'S’il ne reste que les deux rois, la partie s’arrête : le plus de vies gagne (à égalité, celui qui a fait la dernière prise).',
-      'L’hôte choisit le temps de chaque joueur : 3, 5, 10 ou 20 minutes. Tu as 10 secondes pour contester.',
+      'L’hôte choisit le temps de chaque joueur : 3, 5, 10, 20 minutes ou illimité. Tu as 10 secondes pour contester.',
       'Les pièces prises sont révélées dans les cimetières, à côté du plateau. En fin de partie, tout le plateau est révélé.',
       'Pas d’échec, de mat, de pat, de roque, de prise en passant ni de règle des 50 coups.',
     ],
@@ -143,6 +143,7 @@ export function Tutorial({ skins, loggedIn }: { skins: Skins; loggedIn: boolean 
   const [grave, setGrave] = useState<Kind[]>([])
   const [sel, setSel] = useState<string | null>(null)
   const [as, setAs] = useState<Kind>('P')
+  const [pickerOpen, setPickerOpen] = useState(false)
   const [promo, setPromo] = useState<Sq | null>(null)
   const [markStage, setMarkStage] = useState<'ask' | 'pick' | string>('ask') // or the id of the piece being marked
   const [lives, setLives] = useState({ w: 10, b: 10 })
@@ -202,9 +203,11 @@ export function Tutorial({ skins, loggedIn }: { skins: Skins; loggedIn: boolean 
     }
     if (step.type !== 'move' || promo) return
     if (p?.owner === 'w') {
-      setSel(p.id === sel ? null : p.id)
-      setAs(p.kind)
       setMsg('')
+      if (p.id === sel) return setPickerOpen(!pickerOpen)
+      setSel(p.id)
+      setAs(p.kind)
+      setPickerOpen(true)
       return
     }
     if (!selected || !dests.some((d) => d.x === x && d.y === y)) return setSel(null)
@@ -237,7 +240,7 @@ export function Tutorial({ skins, loggedIn }: { skins: Skins; loggedIn: boolean 
   const guide: Sq[] = done || !g ? []
     : step.type === 'mark' ? (markStage === 'pick' && g.mark ? [sq(g.mark)] : [])
     : step.type === 'contest' ? (g.pick ? [sq(g.pick)] : [])
-    : sel ? (g.to && (!g.as || as === g.as) ? [sq(g.to)] : [])
+    : sel ? (g.to && !pickerOpen && (!g.as || as === g.as) ? [sq(g.to)] : [])
     : g.pick ? [sq(g.pick)] : []
 
   let popover: { at: Sq; content: ReactNode } | null = null
@@ -251,13 +254,13 @@ export function Tutorial({ skins, loggedIn }: { skins: Skins; loggedIn: boolean 
         </>
       ),
     }
-  else if (selected && step.type === 'move' && !done)
+  else if (selected && step.type === 'move' && !done && pickerOpen)
     popover = {
       at: selected,
       content: (
         <>
           <p className="pop-title">Jouer comme…</p>
-          <KindPicker owner="w" skin={skins.pieces} cur={as} real={selected.kind} guide={g?.as !== as ? g?.as : undefined} onPick={setAs} />
+          <KindPicker owner="w" skin={skins.pieces} cur={as} real={selected.kind} guide={g?.as ?? selected.kind} onPick={(k) => { setAs(k); setPickerOpen(false) }} />
         </>
       ),
     }
@@ -302,7 +305,7 @@ export function Tutorial({ skins, loggedIn }: { skins: Skins; loggedIn: boolean 
   return (
     <main className="game tutorial">
       <div className="board-col">
-        <div className="bar"><div className="who"><span className="avatar" aria-hidden="true">A</span><b>Adversaire</b></div><div className="lives">❤ {lives.b}</div></div>
+        <div className="bar"><div className="who"><Avatar name="Adversaire" size={30} /><b>Adversaire</b></div><div className="lives">❤ {lives.b}</div></div>
         <Board
           me="w" skins={skins} onSquare={click} sel={step.type === 'swap' ? pieces.find((p) => p.id === sel) : selected}
           dests={dests} last={last} guide={guide} popover={popover} overlay={overlay}
@@ -310,7 +313,7 @@ export function Tutorial({ skins, loggedIn }: { skins: Skins; loggedIn: boolean 
           pieces={pieces.map((p) => ({ ...p, kind: p.owner === 'w' ? p.kind : undefined, mark: marks[p.id] }))}
         />
         <div className="bar">
-          <div className="who"><span className="avatar" aria-hidden="true">T</span><b>Toi</b></div>
+          <div className="who"><Avatar name="Toi" size={30} /><b>Toi</b></div>
           <div className="lives">❤ {lives.w}</div>
           <div className="grave">{grave.map((k, n) => <PieceIcon key={n} kind={k} owner="w" skin={skins.pieces} />)}</div>
         </div>
