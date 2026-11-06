@@ -67,7 +67,7 @@ Roque, prise en passant, échec, pat, règle des 50 coups.
 - **Personnalisation** : skins de pièces et de plateau débloqués par les quêtes.
 - **Mon compte** : connexion / inscription, statistiques, historique, face-à-face, mot de passe, déconnexion.
 - **Paramètres** : thème (jour, nuit, vert clair, mauve améthyste), afficher les coups possibles, sons.
-- **Règles** et **tutoriel interactif** (8 étapes guidées : vrai coup, bluff, contester, fausse alerte, marquer, capturer le roi).
+- **Règles** et **tutoriel interactif** (13 étapes guidées couvrant toutes les règles, avec anneaux d’aide sur le plateau).
 
 ## Technique
 - TypeScript partout.
