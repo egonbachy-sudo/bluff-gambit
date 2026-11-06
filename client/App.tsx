@@ -29,7 +29,7 @@ function loadSettings(): Settings {
 }
 const route = () => location.hash.slice(1) || '/'
 const go = (r: string) => (location.hash = r)
-const NAV: [string, string][] = [['/jouer', 'Jouer'], ['/tutoriel', 'Tutoriel'], ['/classements', 'Classements'], ['/perso', 'Personnalisation'], ['/regles', 'Règles']]
+const NAV: [string, string, string][] = [['/jouer', 'Jouer', '♟'], ['/tutoriel', 'Tutoriel', '🎓'], ['/classements', 'Classements', '🏆'], ['/perso', 'Personnalisation', '🎨'], ['/regles', 'Règles', '📖']]
 
 export function App() {
   const [page, setPage] = useState(route)
@@ -115,11 +115,16 @@ export function App() {
   else body = <Home me={me} online={online} view={view} skins={skins} />
 
   return (
-    <div className={`app ${page === '/partie' ? 'in-game' : ''}`}>
+    <div className={`app ${page === '/partie' && view ? 'in-game' : ''}`}>
       <header className="top">
         <a href="#/" className="brand"><span className="brand-mark" aria-hidden="true">♞</span>Bluff <span>Gambit</span></a>
         <nav className="nav" aria-label="Navigation principale">
-          {NAV.map(([r, l]) => <a key={r} href={`#${r}`} className={page === r ? 'current' : ''} aria-current={page === r ? 'page' : undefined}>{l}</a>)}
+          {NAV.map(([r, l, icon]) => (
+            <a key={r} href={`#${r}`} className={page === r ? 'current' : ''} aria-current={page === r ? 'page' : undefined}>
+              <span className="nav-icon" aria-hidden="true">{icon}</span>
+              <span className="nav-label">{r === '/perso' ? <>Perso<span className="nav-long">nnalisation</span></> : l}</span>
+            </a>
+          ))}
         </nav>
         <div className="top-actions">
           {view && view.phase !== 'over' && page !== '/partie' && <a href="#/partie" className="btn primary small pulse">Partie en cours</a>}

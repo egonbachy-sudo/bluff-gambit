@@ -156,7 +156,7 @@ async function startRoom(a: number, b: number, minutes: number, ranked: boolean,
   if (b === BOT_ID) {
     room.bot = w === BOT_ID ? 'w' : 'b'
     room.mem = Bot.newMem(level)
-    room.names[room.bot] = `Bluffbot 🤖 ${level}`
+    room.names[room.bot] = `Bluffbot (${level})`
   }
   for (const id of [w, bl]) if (id !== BOT_ID) roomOf.set(id, room)
   after(room)

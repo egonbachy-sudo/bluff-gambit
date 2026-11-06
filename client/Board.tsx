@@ -1,5 +1,5 @@
 // Shared animated board: squares handle clicks, pieces live in a layer above and glide between squares.
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { CSSProperties, ReactNode } from 'react'
 import { KINDS, LETTER, NAMES } from '../shared/rules.ts'
 import type { Color, Kind, Sq } from '../shared/rules.ts'
@@ -101,8 +101,16 @@ export function Board(props: {
   }, [pieces, captured])
 
   const popCol = popover ? xs.indexOf(popover.at.x) : 0, popRow = popover ? ys.indexOf(popover.at.y) : 0
+  const boardRef = useRef<HTMLDivElement>(null), popRef = useRef<HTMLDivElement>(null)
+  // Center the popover on its square, but keep it inside the board on narrow screens.
+  useLayoutEffect(() => {
+    const b = boardRef.current, p = popRef.current
+    if (!b || !p) return
+    const B = b.clientWidth, w = Math.min(p.offsetWidth, B)
+    p.style.left = `${Math.max(0, Math.min(B - w, ((popCol + 0.5) * B) / 8 - w / 2))}px`
+  })
   return (
-    <div className={`board board-${skins.board}`}>
+    <div className={`board board-${skins.board}`} ref={boardRef}>
       <div className="grid">
         {ys.map((y) =>
           xs.map((x) => {
@@ -140,10 +148,7 @@ export function Board(props: {
         ))}
       </div>
       {popover && (
-        <div
-          className={`popover ${popRow < 2 ? 'below' : 'above'} ${popCol < 2 ? 'left' : popCol > 5 ? 'right' : ''}`}
-          style={{ '--col': popCol, '--row': popRow } as CSSProperties}
-        >
+        <div ref={popRef} className={`popover ${popRow < 2 ? 'below' : 'above'}`} style={{ '--row': popRow } as CSSProperties}>
           {popover.content}
         </div>
       )}
