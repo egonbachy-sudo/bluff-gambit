@@ -57,4 +57,12 @@ await client.execute('ALTER TABLE users ADD COLUMN google_sub TEXT').catch(() =>
 await client.execute('CREATE UNIQUE INDEX IF NOT EXISTS users_google ON users(google_sub)')
 await client.execute('ALTER TABLE games ADD COLUMN start TEXT').catch(() => {})
 await client.execute('ALTER TABLE users ADD COLUMN avatar TEXT').catch(() => {})
+await client.executeMultiple(`
+CREATE TABLE IF NOT EXISTS live_games (id TEXT PRIMARY KEY, data TEXT NOT NULL, updated_at INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS password_resets (token_hash TEXT PRIMARY KEY, user_id INTEGER NOT NULL, expires INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS friends (user_id INTEGER NOT NULL, friend_id INTEGER NOT NULL, status TEXT NOT NULL, created_at INTEGER NOT NULL, PRIMARY KEY (user_id, friend_id));
+CREATE TABLE IF NOT EXISTS season_awards (season TEXT NOT NULL, rank INTEGER NOT NULL, user_id INTEGER NOT NULL, PRIMARY KEY (season, rank));
+CREATE TABLE IF NOT EXISTS push_subs (endpoint TEXT PRIMARY KEY, user_id INTEGER NOT NULL, data TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+`)
 await client.execute('CREATE TABLE IF NOT EXISTS rewards (user_id INTEGER NOT NULL, day TEXT NOT NULL, quest TEXT NOT NULL, xp INTEGER NOT NULL, PRIMARY KEY (user_id, day, quest))')

@@ -12,3 +12,11 @@ services:
         sync: false
       - key: GOOGLE_CLIENT_ID
         sync: false
+      - key: BREVO_API_KEY
+        sync: false
+      - key: MAIL_FROM
+        sync: false
+      - key: PUBLIC_URL
+        sync: false
+      - key: CONTACT_EMAIL
+        sync: false

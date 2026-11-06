@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { beep, call } from './net.ts'
+import { translate } from './i18n.ts'
 import { Avatar, Board, KindPicker, PieceIcon } from './Board.tsx'
 import type { BoardPiece, Skins } from './Board.tsx'
 import { classicSetup, destinations, homeRows, lastRank, layoutPlacement, opp, randomSetup, setupError, sqName, EMOTES, NAMES } from '../shared/rules.ts'
@@ -12,6 +13,7 @@ export type { Skins } from './Board.tsx'
 export type GameView = View & {
   names: Record<Color, string>; avatars?: Record<Color, string | null>; elo: Record<Color, number>; ranked: boolean; minutes: number
   clock: Record<Color, number>; windowLeft: number; setupLeft: number; eloDelta?: Record<Color, number>; at: number
+  away?: Record<Color, number>; spectators?: number
 }
 type Piece = { id: string; owner: Color; x: number; y: number; kind?: Kind; moved?: boolean; claim?: Kind | null }
 type SetupPiece = Placement[number] & { id: string }
@@ -61,6 +63,14 @@ export function Game({ v, skins, layout, sound, hints, emote, onLeave, savedId }
   useEffect(() => {
     if (sound && v.phase === 'challenge' && v.turn === me) beep(880)
   }, [v.phase, v.turn, me, sound])
+  // Hidden tab: show it in the title and, if allowed, as a system notification.
+  const mine = (v.phase === 'move' || v.phase === 'challenge') && v.turn === me
+  useEffect(() => {
+    document.title = mine ? translate('● À toi de jouer · Bluff Gambit') : 'Bluff Gambit'
+    if (mine && document.hidden && typeof Notification !== 'undefined' && Notification.permission === 'granted')
+      try { new Notification('Bluff Gambit', { body: translate(v.phase === 'challenge' ? "L'adversaire vient de jouer : contester ou non ?" : 'À toi de jouer'), tag: 'turn', icon: '/icon-192.png' }) } catch {}
+    return () => { document.title = 'Bluff Gambit' }
+  }, [mine, v.phase])
 
   const send = (ev: string, data: unknown = {}) => call(ev, data).then(() => setErr('')).catch((e: Error) => setErr(e.message))
   const setupMode = v.phase === 'setup' && !v.ready[me]
@@ -124,6 +134,7 @@ export function Game({ v, skins, layout, sound, hints, emote, onLeave, savedId }
           <b>{v.names[c]}</b> <small>{v.elo[c]}</small>
           {c === foe && emote && <span className="bubble" role="status">{emote}</span>}
         </div>
+        {!!v.away?.[c] && <div className="away" role="status">{c === me ? 'Reconnexion…' : `Déconnecté · victoire dans ${fmt(v.away[c] - (now - v.at))}`}</div>}
         <div className="lives" aria-label={`${v.lives[c]} vies`}><span key={v.lives[c]} className="heart">❤</span> {v.lives[c]}</div>
         <div className={`clock ${v.minutes && active && ms < 30_000 ? 'low' : ''}`}>{v.minutes ? fmt(ms) : '∞'}</div>
         <div className="grave" ref={(el) => { graves.current[c] = el }}>
@@ -249,6 +260,7 @@ export function Game({ v, skins, layout, sound, hints, emote, onLeave, savedId }
 
       <aside className="panel">
         <div className="controls card" aria-live="polite">
+          {!!v.spectators && <p className="muted spectators">👁 {v.spectators} spectateur{v.spectators > 1 ? 's' : ''}</p>}
           {controls}
           {err && <p className="warn">{err}</p>}
         </div>

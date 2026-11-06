@@ -36,6 +36,20 @@ Limite du gratuit : le serveur s'endort après 15 min sans visiteur, le premier 
 
 Un compte créé avec un e-mail + mot de passe ne se relie pas automatiquement à Google (son e-mail n'a jamais été vérifié) : ces joueurs continuent avec leur mot de passe.
 
+## 5. Mot de passe oublié (facultatif)
+Les e-mails de réinitialisation partent via Brevo (gratuit, 300 e-mails/jour, sans carte bancaire).
+1. Crée un compte sur https://www.brevo.com.
+2. **Senders, Domains & Dedicated IPs → Senders** : ajoute ton adresse d'envoi (ex. ton Gmail) et valide le lien reçu.
+3. **SMTP & API → API Keys** : crée une clé API.
+4. Dans Render → **Environment**, ajoute :
+   - `BREVO_API_KEY` = la clé
+   - `MAIL_FROM` = l'adresse validée à l'étape 2
+   - `PUBLIC_URL` = `https://bluff-gambit-bgy7.onrender.com`
+5. Le lien « Mot de passe oublié ? » envoie alors un e-mail valable 1 heure.
+
+## 6. Contact (page Confidentialité)
+Ajoute `CONTACT_EMAIL` dans Render pour afficher une adresse de contact sur la page Confidentialité (obligatoire pour le RGPD dès que le site est public).
+
 ## Mettre à jour le site
 `git push` : Render reconstruit et redéploie tout seul. Les parties en cours sont coupées pendant le redéploiement, les comptes et classements restent (ils sont chez Turso).
 

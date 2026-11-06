@@ -7,6 +7,9 @@ import { Avatar, Board, PieceIcon, reducedMotion } from './Board.tsx'
 import type { BoardPiece, Skins } from './Board.tsx'
 import { Tutorial } from './Tutorial.tsx'
 import { Replay } from './Replay.tsx'
+import { defaultLang, getLang, setLang } from './i18n.ts'
+import type { Lang } from './i18n.ts'
+import { ForgotPassword, Friends, InviteToast, LiveGames, NotifySetting, Privacy, ResetPassword, Spectate, useFriendRequests } from './Social.tsx'
 import { avatarOf, layoutError, levelOf, placementLayout, randomSetup, AVATARS_BASE, AVATARS_SPECIAL, BOARD_SKINS, DEFAULT_LAYOUT, KINDS, NAMES, PIECE_SKINS, QUESTS, TIME_CONTROLS } from '../shared/rules.ts'
 import type { Kind, Sq } from '../shared/rules.ts'
 
@@ -15,11 +18,12 @@ type Profile = {
   stats: Record<string, number>; level: number; unlocked: string[]; inGame: boolean; google: boolean; hasPassword: boolean
   daily: { quests: { id: string; label: string; goal: number; progress: number; done: boolean; xp: number }[]; resetAt: number }
   season: { label: string; start: number; end: number }
+  awards: { season: string; rank: number; label: string }[]
 }
 type Online = { players: number; visitors: number }
-type Settings = { theme: string; hints: boolean; sound: boolean }
+type Settings = { theme: string; hints: boolean; sound: boolean; lang: Lang }
 const THEMES: Record<string, string> = { jour: 'Jour', nuit: 'Nuit', vert: 'Vert clair', amethyste: 'Mauve améthyste' }
-const DEFAULTS: Settings = { theme: 'nuit', hints: true, sound: true }
+const DEFAULTS: Settings = { theme: 'nuit', hints: true, sound: true, lang: defaultLang() }
 function loadSettings(): Settings {
   try {
     return { ...DEFAULTS, ...JSON.parse(localStorage.getItem('bg_settings') ?? '{}') }
@@ -29,14 +33,16 @@ function loadSettings(): Settings {
 }
 const route = () => location.hash.slice(1) || '/'
 const go = (r: string) => (location.hash = r)
-const NAV: [string, string, string][] = [['/jouer', 'Jouer', '♟'], ['/tutoriel', 'Tutoriel', '🎓'], ['/classements', 'Classements', '🏆'], ['/perso', 'Personnalisation', '🎨'], ['/regles', 'Règles', '📖']]
+const NAV: [string, string, string][] = [['/jouer', 'Jouer', '♟'], ['/amis', 'Amis', '🤝'], ['/tutoriel', 'Tutoriel', '🎓'], ['/classements', 'Classements', '🏆'], ['/perso', 'Personnalisation', '🎨'], ['/regles', 'Règles', '📖']]
 
 export function App() {
   const [page, setPage] = useState(route)
   const [me, setMe] = useState<Profile | null>(null)
+  const requests = useFriendRequests(!!me)
   const [online, setOnline] = useState<Online>({ players: 0, visitors: 0 })
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [googleClientId, setGoogleClientId] = useState('')
+  const [cfg, setCfg] = useState({ mail: false, contact: '', vapid: '' })
   const [savedId, setSavedId] = useState<number | null>(null)
   const [view, setView] = useState<GameView | null>(null)
   const [emote, setEmote] = useState('')
@@ -44,6 +50,7 @@ export function App() {
 
   useEffect(() => {
     document.documentElement.dataset.theme = settings.theme
+    setLang(settings.lang)
     try {
       localStorage.setItem('bg_settings', JSON.stringify(settings))
     } catch {
@@ -52,10 +59,11 @@ export function App() {
   }, [settings])
 
   const refresh = useCallback(() => {
-    call<{ profile: Profile | null; online: Online; googleClientId: string }>('me').then((r) => {
+    call<{ profile: Profile | null; online: Online; googleClientId: string; mail: boolean; contact: string; vapid: string }>('me').then((r) => {
       setMe(r.profile)
       setOnline(r.online)
       setGoogleClientId(r.googleClientId)
+      setCfg({ mail: r.mail, contact: r.contact, vapid: r.vapid })
     }).catch(() => {})
   }, [])
 
@@ -108,10 +116,14 @@ export function App() {
   else if (page === '/jouer') body = <Play me={me} view={view} />
   else if (page === '/classements') body = <Leaderboards me={me} />
   else if (page === '/perso') body = <Customize me={me} setMe={setMe} />
-  else if (page === '/compte') body = <Account me={me} setMe={setMe} googleClientId={googleClientId} />
+  else if (page === '/compte') body = <Account me={me} setMe={setMe} googleClientId={googleClientId} mail={cfg.mail} />
   else if (page === '/regles') body = <Rules />
   else if (page === '/tutoriel') body = <Tutorial skins={skins} loggedIn={!!me} />
   else if (page.startsWith('/replay/')) body = <Replay id={Number(page.slice(8))} skins={skins} />
+  else if (page === '/amis') body = <Friends loggedIn={!!me} />
+  else if (page.startsWith('/regarder/')) body = <Spectate id={page.slice(10)} skins={skins} />
+  else if (page === '/confidentialite') body = <Privacy contact={cfg.contact} />
+  else if (page.startsWith('/reset/')) body = <ResetPassword token={page.slice(7)} />
   else body = <Home me={me} online={online} view={view} skins={skins} />
 
   return (
@@ -121,7 +133,7 @@ export function App() {
         <nav className="nav" aria-label="Navigation principale">
           {NAV.map(([r, l, icon]) => (
             <a key={r} href={`#${r}`} className={page === r ? 'current' : ''} aria-current={page === r ? 'page' : undefined}>
-              <span className="nav-icon" aria-hidden="true">{icon}</span>
+              <span className="nav-icon" aria-hidden="true">{icon}{r === '/amis' && requests > 0 && <span className="badge">{requests}</span>}</span>
               <span className="nav-label">{r === '/perso' ? <>Perso<span className="nav-long">nnalisation</span></> : l}</span>
             </a>
           ))}
@@ -140,7 +152,9 @@ export function App() {
         </div>
       </header>
       <div key={page} className="page-anim">{body}</div>
-      {settingsOpen && <SettingsModal s={settings} set={setSettings} close={() => setSettingsOpen(false)} />}
+      {settingsOpen && <SettingsModal s={settings} set={setSettings} close={() => setSettingsOpen(false)} vapid={cfg.vapid} loggedIn={!!me} />}
+      {me && <InviteToast />}
+      <footer className="foot"><a href="#/confidentialite">Confidentialité</a><span aria-hidden="true">·</span><a href="#/regles">Règles</a></footer>
     </div>
   )
 }
@@ -290,8 +304,8 @@ function Home({ me, online, view, skins }: { me: Profile | null; online: Online;
           </div>
           {err && <p className="warn" role="alert">{err}</p>}
           <p className="online">
-            <span className="dot" aria-hidden="true" /> {online.players} joueur{online.players > 1 ? 's' : ''} connecté{online.players > 1 ? 's' : ''}
-            {online.visitors > 0 && <span className="muted"> · {online.visitors} visiteur{online.visitors > 1 ? 's' : ''}</span>}
+            <span className="dot" aria-hidden="true" /> {online.players} <span>{online.players > 1 ? 'joueurs connectés' : 'joueur connecté'}</span>
+            {online.visitors > 0 && <span className="muted"> · {online.visitors} <span>{online.visitors > 1 ? 'visiteurs' : 'visiteur'}</span></span>}
           </p>
         </div>
         <HeroBoard skins={skins} />
@@ -419,6 +433,7 @@ function Play({ me, view }: { me: Profile | null; view: GameView | null }) {
         </div>
       )}
       {err && <p className="warn" role="alert">{err}</p>}
+      <LiveGames />
     </main>
   )
 }
@@ -488,7 +503,7 @@ function AvatarPicker({ me, setMe }: { me: Profile; setMe: (p: Profile) => void 
               aria-label={`${a.label}${open ? '' : ' (verrouillée)'}`} aria-pressed={me.avatar === id}>
               <Avatar id={id} name={me.name} size={52} />
               <b>{a.label}</b>
-              {!open && <small>🔒 {quest(key)?.label}</small>}
+              {!open && <small>🔒 {quest(key)?.label ?? 'Finir dans le top 3 d’une saison'}</small>}
             </button>
           )
         })}
@@ -622,7 +637,8 @@ function GoogleButton({ clientId, onCredential }: { clientId: string; onCredenti
   return clientId ? <div className="google-btn" ref={ref} /> : null
 }
 
-function AuthForm({ setMe, googleClientId }: { setMe: (p: Profile) => void; googleClientId: string }) {
+function AuthForm({ setMe, googleClientId, mail }: { setMe: (p: Profile) => void; googleClientId: string; mail: boolean }) {
+  const [forgot, setForgot] = useState(false)
   const [google, setGoogle] = useState<{ ticket: string; name: string } | null>(null)
   const [mode, setMode] = useState<'login' | 'register'>('login')
   const [f, setF] = useState({ login: '', name: '', email: '', password: '' })
@@ -645,6 +661,7 @@ function AuthForm({ setMe, googleClientId }: { setMe: (p: Profile) => void; goog
     call<{ token: string; profile: Profile } | { needName: true; ticket: string; suggestion: string }>('google', { credential })
       .then((r) => ('needName' in r ? setGoogle({ ticket: r.ticket, name: r.suggestion }) : signedIn(r)))
       .catch((e: Error) => setErr(e.message))
+  if (forgot) return <ForgotPassword mail={mail} onBack={() => setForgot(false)} />
   if (google)
     return (
       <form className="card auth" onSubmit={submit}>
@@ -673,6 +690,8 @@ function AuthForm({ setMe, googleClientId }: { setMe: (p: Profile) => void; goog
       <label>Mot de passe<input {...field('password')} type="password" autoComplete={mode === 'login' ? 'current-password' : 'new-password'} required /></label>
       <label className="check"><input type="checkbox" checked={remember} onChange={(e) => setRemember(e.target.checked)} /> Rester connecté</label>
       <button className="primary" type="submit" disabled={busy}>{busy ? 'Un instant…' : mode === 'login' ? 'Se connecter' : 'Créer mon compte'}</button>
+      {mode === 'login' ? <button type="button" className="link-btn" onClick={() => setForgot(true)}>Mot de passe oublié ?</button>
+        : <small className="muted">En créant un compte, tu acceptes notre <a href="#/confidentialite">politique de confidentialité</a>.</small>}
       {googleClientId && <div className="or" aria-hidden="true">ou</div>}
       <GoogleButton clientId={googleClientId} onCredential={withGoogle} />
       {err && <p className="warn" role="alert">{err}</p>}
@@ -684,8 +703,10 @@ type History = {
   games: { game_id: number; replayable: number; won: number; score: number; elo_before: number; elo_after: number; ended_at: number; opponent: string; reason: string; ranked: number }[]
   rivals: { name: string; games: number; wins: number }[]
 }
-const dateFmt = new Intl.DateTimeFormat('fr-BE', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })
-function Account({ me, setMe, googleClientId }: { me: Profile | null; setMe: (p: Profile | null) => void; googleClientId: string }) {
+const dateFmt = { format: (t: number) => new Intl.DateTimeFormat(getLang() === 'en' ? 'en-GB' : 'fr-BE', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }).format(t) }
+function Account({ me, setMe, googleClientId, mail }: { me: Profile | null; setMe: (p: Profile | null) => void; googleClientId: string; mail: boolean }) {
+  const [del, setDel] = useState('')
+  const [delMsg, setDelMsg] = useState('')
   const [h, setH] = useState<History | null>(null)
   const [pw, setPw] = useState({ old: '', new: '' })
   const [msg, setMsg] = useState('')
@@ -697,7 +718,7 @@ function Account({ me, setMe, googleClientId }: { me: Profile | null; setMe: (p:
       <main className="page narrow">
         <h1>Bienvenue</h1>
         <p className="muted">Connecte-toi ou crée un compte pour jouer en ligne, monter au classement et débloquer des skins.</p>
-        <AuthForm setMe={setMe} googleClientId={googleClientId} />
+        <AuthForm setMe={setMe} googleClientId={googleClientId} mail={mail} />
       </main>
     )
   const st = me.stats, xpNext = 100 * me.level ** 2, xpPrev = 100 * (me.level - 1) ** 2
@@ -726,6 +747,11 @@ function Account({ me, setMe, googleClientId }: { me: Profile | null; setMe: (p:
           <div><b>{st.uncaught_bluffs}</b>bluffs réussis</div>
           <div><b>{st.correct_marks}</b>marquages justes</div>
         </div>
+        {!!me.awards.length && (
+          <div className="awards">
+            {me.awards.map((a) => <span key={a.season} className="award">{['', '🥇', '🥈', '🥉'][a.rank]} {a.label}</span>)}
+          </div>
+        )}
       </section>
       <section className="card">
         <h3>Dernières parties</h3>
@@ -774,6 +800,19 @@ function Account({ me, setMe, googleClientId }: { me: Profile | null; setMe: (p:
         </section>
       )}
       <button className="danger ghost-btn" onClick={logout}>Se déconnecter</button>
+      <details className="card danger-zone">
+        <summary>Supprimer mon compte</summary>
+        <p className="muted">Ton e-mail, ton mot de passe, ta photo et tes amis sont effacés définitivement. Tes anciennes parties restent anonymes pour tes adversaires. Tape ton pseudo pour confirmer.</p>
+        <form className="row" onSubmit={(e) => {
+          e.preventDefault()
+          call('account:delete', { name: del }).then(() => { saveToken(null); setMe(null); go('/') }).catch((e: Error) => setDelMsg(e.message))
+        }}>
+          <input value={del} onChange={(e) => setDel(e.target.value)} placeholder={me.name} aria-label="Ton pseudo pour confirmer" autoComplete="off" spellCheck={false} />
+          <button className="danger-fill" type="submit" disabled={del.toLowerCase() !== me.name.toLowerCase()}>Supprimer définitivement</button>
+        </form>
+        {delMsg && <p className="warn">{delMsg}</p>}
+      </details>
+      <p className="muted"><a href="#/confidentialite">Confidentialité et données</a></p>
     </main>
   )
 }
@@ -819,7 +858,7 @@ function InstallApp() {
   )
 }
 
-function SettingsModal({ s, set, close }: { s: Settings; set: (s: Settings) => void; close: () => void }) {
+function SettingsModal({ s, set, close, vapid, loggedIn }: { s: Settings; set: (s: Settings) => void; close: () => void; vapid: string; loggedIn: boolean }) {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => e.key === 'Escape' && close()
     addEventListener('keydown', onKey)
@@ -831,6 +870,12 @@ function SettingsModal({ s, set, close }: { s: Settings; set: (s: Settings) => v
         <div className="settings-head">
           <h2>Paramètres</h2>
           <button className="icon-btn" aria-label="Fermer" onClick={close}>✕</button>
+        </div>
+        <h3>Langue</h3>
+        <div className="row segmented" role="radiogroup" aria-label="Langue">
+          {([['fr', 'Français'], ['en', 'English']] as const).map(([l, label]) => (
+            <button key={l} role="radio" aria-checked={s.lang === l} className={s.lang === l ? 'on' : ''} onClick={() => set({ ...s, lang: l })} translate="no">{label}</button>
+          ))}
         </div>
         <h3>Thème</h3>
         <div className="themes">
@@ -844,6 +889,7 @@ function SettingsModal({ s, set, close }: { s: Settings; set: (s: Settings) => v
         <h3>Partie</h3>
         <label className="check"><input type="checkbox" checked={s.hints} onChange={(e) => set({ ...s, hints: e.target.checked })} /> Afficher les coups possibles</label>
         <label className="check"><input type="checkbox" checked={s.sound} onChange={(e) => set({ ...s, sound: e.target.checked })} /> Sons</label>
+        <NotifySetting vapid={vapid} loggedIn={loggedIn} />
       </div>
     </div>
   )
@@ -860,7 +906,7 @@ function Rules() {
         <h3>Placement</h3>
         <p>Place tes 16 pièces comme tu veux sur tes 2 premières rangées, avec 1 fou sur case claire et 1 fou sur case foncée. Ton arrangement préféré s'enregistre dans Personnalisation.</p>
         <h3>Jouer</h3>
-        <p>Touche une pièce, choisis ce qu'elle imite ({KINDS.length} types), puis joue un coup légal pour ce type. La petite lettre en haut à gauche te rappelle comment tu l'as jouée.</p>
+        <p>Touche une pièce, choisis ce qu'elle imite, puis joue un coup légal pour ce type. La petite icône en haut à gauche te rappelle comment tu l'as jouée.</p>
         <h3>Contester</h3>
         <p>Juste après chaque coup adverse, tu as 10 secondes pour contester. Si c'était un bluff, il perd 1 vie et la pièce (et sa prise est annulée). Sinon, c'est toi qui perds 1 vie.</p>
         <h3>Gagner</h3>

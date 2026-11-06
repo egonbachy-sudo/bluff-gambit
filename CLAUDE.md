@@ -25,6 +25,7 @@ Deux onglets, sans cocher « Rester connecté » (le jeton est alors stocké par
 ## Avancement
 - Fait : règles, comptes, parties classées et privées, pendules, contestation, marquage, promotion, score, Elo, classements, quêtes, skins, thèmes, paramètres, règles, emotes, historique, face-à-face, Bluffbot (entraînement, partie non sauvegardée), tutoriel interactif
 - Fait aussi : niveaux du bot (facile/normal/difficile, réglés par auto-parties), replay coup par coup (`Replay.tsx`, départ + historique en base), quêtes du jour (3 par jour UTC, XP en table `rewards`), saisons mensuelles (classement « Saison »), appli installable (`client/public` : manifeste, icônes, `sw.js`), liaison Google depuis Mon compte, sessions qui expirent après 30 jours sans usage, photos de profil (20 de base + 6 rares par quêtes, `avatarOf` dans shared), temps illimité (minutes = 0)
+- Fait aussi : abandon après 90 s de déconnexion, parties en cours sauvegardées (`live_games`) et reprises au redémarrage, suppression de compte (anonymisation) + page Confidentialité, mot de passe oublié (Brevo), amis + invitations, mode spectateur, récompenses de fin de saison (top 3 → photo Champion), notifications push (`web-push`, clés VAPID en base), version anglaise (`client/i18n.ts` : traduction à l'affichage, dictionnaire FR→EN + motifs ; `window.__i18nMissing()` liste les textes non traduits)
 - À faire : à définir
 
 ## Mise en ligne

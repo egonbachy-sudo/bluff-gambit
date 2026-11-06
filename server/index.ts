@@ -1,14 +1,15 @@
 import http from 'node:http'
 import { readFile } from 'node:fs/promises'
 import { extname, join, normalize } from 'node:path'
-import { randomBytes, scryptSync, timingSafeEqual } from 'node:crypto'
+import { createHash, randomBytes, scryptSync, timingSafeEqual } from 'node:crypto'
+import * as webpush from 'web-push'
 import { Server } from 'socket.io'
 import { all, get, run } from './db.ts'
 import type { Row } from './db.ts'
 import * as G from './game.ts'
 import * as Bot from './bot.ts'
 import { avatarOf, dailyQuests, dayKey, seasonOf, nameError, layoutError, layoutPlacement, opp, randomSetup, levelOf, DEFAULT_LAYOUT, CHALLENGE_SECONDS, DEFAULT_UNLOCKS, EMOTES, QUESTS, TIME_CONTROLS } from '../shared/rules.ts'
-import type { Color } from '../shared/rules.ts'
+import type { Color, Kind } from '../shared/rules.ts'
 
 const PORT = Number(process.env.PORT ?? 3000)
 const SETUP_MS = 120_000
@@ -84,15 +85,24 @@ async function daily(id: number) {
   for (const q of quests) if (q.done) await run('INSERT OR IGNORE INTO rewards VALUES (?, ?, ?, ?)', id, day, q.id, q.xp)
   return { quests, resetAt: since + 86_400_000 }
 }
-const unlockedOf = (st: Row) => [...DEFAULT_UNLOCKS, ...QUESTS.filter((q) => st[q.stat] >= q.goal).map((q) => q.reward)]
+const unlockedOf = (st: Row, champion = false) =>
+  [...DEFAULT_UNLOCKS, ...QUESTS.filter((q) => st[q.stat] >= q.goal).map((q) => q.reward), ...(champion ? ['avatar:champion'] : [])]
+async function awardsOf(id: number) {
+  const rows = await all('SELECT season, rank FROM season_awards WHERE user_id = ? AND rank > 0 ORDER BY season DESC', id)
+  return rows.map((r) => ({ season: r.season as string, rank: r.rank as number, label: seasonOf(Date.parse(`${r.season}-15`)).label }))
+}
+async function unlockedFor(id: number) {
+  return unlockedOf(await stats(id), (await awardsOf(id)).length > 0)
+}
 async function profile(id: number) {
   const u = (await get('SELECT id, name, email, elo, piece_skin, board_skin, layout, avatar, google_sub, hash FROM users WHERE id = ?', id))!
   const dq = await daily(id) // first: it may grant XP that stats() then counts
   const st = await stats(id)
   const { google_sub, hash, ...pub } = u
+  const awards = await awardsOf(id)
   return {
     ...pub, layout: u.layout ?? DEFAULT_LAYOUT, google: !!google_sub, hasPassword: hash !== '!',
-    stats: st, level: levelOf(st.xp), unlocked: unlockedOf(st), inGame: roomOf.has(id), daily: dq, season: seasonOf(),
+    stats: st, level: levelOf(st.xp), unlocked: unlockedOf(st, awards.length > 0), inGame: roomOf.has(id), daily: dq, season: seasonOf(), awards,
   }
 }
 // The training bot is a regular user row whose hash can never match a password.
@@ -109,8 +119,13 @@ type Room = {
   avatars: Record<Color, string | null>
   timer?: NodeJS.Timeout; windowEnd?: number; setupEnd: number; eloDelta?: Record<Color, number>; done?: boolean
   bot?: Color; mem?: Bot.Mem; botTimer?: NodeJS.Timeout
+  id: string; private: boolean
+  /** Deadline after which a disconnected player loses the game. */
+  away: Partial<Record<Color, number>>; awayTimers: Partial<Record<Color, NodeJS.Timeout>>
 }
 const roomOf = new Map<number, Room>()
+const rooms = new Map<string, Room>() // live games by id, for spectators and persistence
+const AWAY_MS = Number(process.env.AWAY_MS ?? 90_000)
 const starting = new Set<number>() // players matched while their room is being created
 const loginFails = new Map<string, number[]>() // shortcut: in-memory, resets on restart
 
@@ -141,7 +156,7 @@ function leaveQueues(id: number) {
   for (const [code, p] of privates) if (p.host === id) privates.delete(code)
 }
 
-async function startRoom(a: number, b: number, minutes: number, ranked: boolean, level: Bot.Level = 'normal') {
+async function startRoom(a: number, b: number, minutes: number, ranked: boolean, level: Bot.Level = 'normal', isPrivate = false) {
   leaveQueues(a)
   leaveQueues(b)
   starting.add(a).add(b)
@@ -154,6 +169,7 @@ async function startRoom(a: number, b: number, minutes: number, ranked: boolean,
     avatars: { w: w === BOT_ID ? 'b:15' : uw.avatar, b: bl === BOT_ID ? 'b:15' : ub.avatar },
     ranked, minutes, g: G.newGame(), clock: { w: minutes * 60_000, b: minutes * 60_000 },
     since: Date.now(), setupEnd: Date.now() + SETUP_MS,
+    id: randomBytes(8).toString('hex'), private: isPrivate, away: {}, awayTimers: {},
   }
   if (b === BOT_ID) {
     room.bot = w === BOT_ID ? 'w' : 'b'
@@ -161,6 +177,7 @@ async function startRoom(a: number, b: number, minutes: number, ranked: boolean,
     room.names[room.bot] = `Bluffbot (${level})`
   }
   for (const id of [w, bl]) if (id !== BOT_ID) roomOf.set(id, room)
+  rooms.set(room.id, room)
   after(room)
 }
 
@@ -195,7 +212,92 @@ function after(r: Room) {
   r.since = Date.now()
   schedule(r)
   send(r)
+  saveRoom(r)
+  notifyTurn(r)
   if (r.bot) botTurn(r)
+}
+
+// ---------- persistence: live games survive a restart ----------
+let saveChain: Promise<unknown> = Promise.resolve()
+const queueWrite = (fn: () => Promise<unknown>) => (saveChain = saveChain.then(fn).catch((e) => console.error('live game', e)))
+function saveRoom(r: Room) {
+  if (r.done) return
+  const { timer, botTimer, awayTimers, mem, ...rest } = r
+  const data = JSON.stringify({
+    ...rest, mem: mem && { level: mem.level, moved: [...mem.moved], possible: [...mem.possible].map(([k, s]) => [k, [...s]]) },
+  })
+  queueWrite(() => run('INSERT OR REPLACE INTO live_games VALUES (?, ?, ?)', r.id, data, Date.now()))
+}
+async function restoreRooms() {
+  for (const row of await all('SELECT id, data FROM live_games')) {
+    try {
+      const d = JSON.parse(row.data)
+      const g: G.Game = d.g
+      // JSON loses object identity: the pending capture must point at the real piece again.
+      if (g.last?.captured) g.last.captured = g.pieces.find((p) => p.id === g.last!.captured!.id) ?? null
+      const r: Room = {
+        ...d, g, since: Date.now(), setupEnd: Date.now() + SETUP_MS, awayTimers: {}, away: {}, done: false,
+        mem: d.mem && { level: d.mem.level, moved: new Set(d.mem.moved), possible: new Map(d.mem.possible.map(([k, a]: [string, Kind[]]) => [k, new Set(a)])) },
+      }
+      rooms.set(r.id, r)
+      for (const c of ['w', 'b'] as Color[]) if (r.players[c] !== BOT_ID) {
+        roomOf.set(r.players[c], r)
+        markAway(r, c, AWAY_MS * 2) // nobody is connected yet right after a restart
+      }
+      after(r)
+    } catch (e) {
+      console.error('restore', row.id, e)
+      await run('DELETE FROM live_games WHERE id = ?', row.id)
+    }
+  }
+}
+
+// ---------- disconnection: a player who stays away loses ----------
+function markAway(r: Room, c: Color, ms = AWAY_MS) {
+  if (r.done || r.away[c]) return
+  r.away[c] = Date.now() + ms
+  r.awayTimers[c] = setTimeout(() => {
+    if (r.done || !r.away[c]) return
+    try { act(r, () => G.resign(r.g, c, 'abandon (déconnexion)')) } catch {}
+  }, ms)
+  send(r)
+}
+function markBack(r: Room, c: Color) {
+  if (!r.away[c]) return
+  clearTimeout(r.awayTimers[c])
+  delete r.away[c]
+  delete r.awayTimers[c]
+  send(r)
+}
+const isOnline = (id: number) => !!io.sockets.adapter.rooms.get(`u${id}`)?.size
+
+// ---------- push notifications: "your turn" when the player has no open tab ----------
+let vapidPublic = ''
+{
+  let keys = (await get("SELECT value FROM settings WHERE key = 'vapid'"))?.value
+  if (!keys) {
+    keys = JSON.stringify(webpush.generateVAPIDKeys())
+    await run("INSERT INTO settings VALUES ('vapid', ?)", keys)
+  }
+  const k = JSON.parse(keys)
+  webpush.setVapidDetails(`mailto:${process.env.CONTACT_EMAIL || 'admin@bluff-gambit.local'}`, k.publicKey, k.privateKey)
+  vapidPublic = k.publicKey
+}
+const lastPush = new Map<number, number>()
+async function pushTo(id: number, title: string, body: string) {
+  if (Date.now() - (lastPush.get(id) ?? 0) < 60_000) return
+  lastPush.set(id, Date.now())
+  for (const s of await all('SELECT endpoint, data FROM push_subs WHERE user_id = ?', id))
+    await webpush.sendNotification(JSON.parse(s.data), JSON.stringify({ title, body })).catch(async (e) => {
+      if (e.statusCode === 404 || e.statusCode === 410) await run('DELETE FROM push_subs WHERE endpoint = ?', s.endpoint)
+    })
+}
+function notifyTurn(r: Room) {
+  if (r.done || !running(r)) return
+  const uid = r.players[r.g.turn]
+  if (uid === BOT_ID || isOnline(uid)) return
+  const foe = r.names[r.g.turn === 'w' ? 'b' : 'w']
+  pushTo(uid, 'Bluff Gambit', r.g.phase === 'challenge' ? `${foe} vient de jouer : contester ?` : `À toi de jouer contre ${foe}`).catch(() => {})
 }
 
 function botTurn(r: Room) {
@@ -243,13 +345,22 @@ function send(r: Room) {
       ...G.view(r.g, c), names: r.names, avatars: r.avatars, elo: r.elo, ranked: r.ranked, minutes: r.minutes, clock,
       windowLeft: r.windowEnd ? r.windowEnd - now : 0,
       setupLeft: r.g.phase === 'setup' ? r.setupEnd - now : 0,
-      eloDelta: r.eloDelta,
+      eloDelta: r.eloDelta, away: awayLeft(r), spectators: spectatorsOf(r),
     })
+  io.to(`spec:${r.id}`).emit('spec', {
+    ...G.spectatorView(r.g), id: r.id, names: r.names, avatars: r.avatars, elo: r.elo, ranked: r.ranked, minutes: r.minutes, clock,
+    windowLeft: r.windowEnd ? r.windowEnd - now : 0, setupLeft: r.g.phase === 'setup' ? r.setupEnd - now : 0, away: awayLeft(r), spectators: spectatorsOf(r),
+  })
 }
+const awayLeft = (r: Room) => ({ w: r.away.w ? r.away.w - Date.now() : 0, b: r.away.b ? r.away.b - Date.now() : 0 })
+const spectatorsOf = (r: Room) => io.sockets.adapter.rooms.get(`spec:${r.id}`)?.size ?? 0
 
 function finish(r: Room) {
   if (r.done) return
   r.done = true
+  rooms.delete(r.id)
+  for (const c of ['w', 'b'] as Color[]) clearTimeout(r.awayTimers[c])
+  queueWrite(() => run('DELETE FROM live_games WHERE id = ?', r.id))
   if (r.bot) {
     // Training games are not saved: no Elo, no stats, no quest farming.
     r.eloDelta = { w: 0, b: 0 }
@@ -276,11 +387,46 @@ function finish(r: Room) {
 
 // ---------- leaderboards ----------
 const sumBoard = (col: string) => `SELECT u.name, u.avatar, SUM(g.${col}) value FROM game_players g JOIN users u ON u.id = g.user_id
-  WHERE g.ended_at > ? GROUP BY u.id HAVING value > 0 ORDER BY value DESC LIMIT 50`
+  WHERE g.ended_at > ? AND u.email NOT LIKE 'deleted-%' GROUP BY u.id HAVING value > 0 ORDER BY value DESC LIMIT 50`
 const BOARDS: Record<string, string> = {
-  elo: `SELECT name, avatar, elo value FROM users WHERE ? >= 0 AND EXISTS (SELECT 1 FROM game_players g WHERE g.user_id = users.id) ORDER BY elo DESC LIMIT 50`,
+  elo: `SELECT name, avatar, elo value FROM users WHERE ? >= 0 AND email NOT LIKE 'deleted-%' AND EXISTS (SELECT 1 FROM game_players g WHERE g.user_id = users.id) ORDER BY elo DESC LIMIT 50`,
   week: sumBoard('score'), season: sumBoard('score'), wins: sumBoard('won'), bluff: sumBoard('uncaught_bluffs'), detect: sumBoard('correct_challenges'),
 }
+
+// ---------- mail (password reset) ----------
+const BREVO_KEY = process.env.BREVO_API_KEY ?? '', MAIL_FROM = process.env.MAIL_FROM ?? ''
+const resetAsks = new Map<string, number[]>()
+const sha256 = (s: string) => createHash('sha256').update(s).digest('hex')
+const escapeHtml = (s: string) => s.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`)
+async function sendMail(to: string, subject: string, html: string) {
+  const r = await fetch('https://api.brevo.com/v3/smtp/email', {
+    method: 'POST',
+    headers: { 'api-key': BREVO_KEY, 'content-type': 'application/json', accept: 'application/json' },
+    body: JSON.stringify({ sender: { email: MAIL_FROM, name: 'Bluff Gambit' }, to: [{ email: to }], subject, htmlContent: html }),
+  })
+  if (!r.ok) {
+    console.error('mail', r.status, await r.text().catch(() => ''))
+    throw new Error('L’e-mail n’a pas pu partir, réessaie plus tard')
+  }
+}
+
+// ---------- friends & invitations ----------
+const invites = new Map<string, { from: number; to: number; minutes: number; exp: number }>()
+const friendsChanged = (...ids: number[]) => { for (const id of ids) io.to(`u${id}`).emit('friends') }
+
+// ---------- end-of-season awards: top 3 of last month ----------
+async function awardSeasons() {
+  const prev = seasonOf(seasonOf().start - 1)
+  if (await get('SELECT 1 FROM season_awards WHERE season = ?', prev.key)) return
+  const top = await all(`SELECT g.user_id, SUM(g.score) s FROM game_players g JOIN users u ON u.id = g.user_id
+    WHERE g.ended_at >= ? AND g.ended_at < ? AND u.email NOT LIKE 'deleted-%' AND u.id <> ? GROUP BY g.user_id HAVING s > 0 ORDER BY s DESC LIMIT 3`,
+    prev.start, prev.end, BOT_ID)
+  // rank 0 = "season processed, nobody qualified", so it is not computed again
+  if (!top.length) return void (await run('INSERT OR IGNORE INTO season_awards VALUES (?, 0, 0)', prev.key))
+  for (const [i, t] of top.entries()) await run('INSERT OR IGNORE INTO season_awards VALUES (?, ?, ?)', prev.key, i + 1, t.user_id)
+}
+await awardSeasons()
+setInterval(() => awardSeasons().catch((e) => console.error('awards', e)), 3_600_000)
 
 // ---------- sockets ----------
 /** Distinct signed-in players, plus open tabs that are not signed in. */
@@ -303,7 +449,11 @@ io.on('connection', (socket) => {
     socket.join(`u${id}`)
     pushOnline()
     const r = roomOf.get(id)
-    if (r) send(r)
+    if (r) {
+      markBack(r, colorOf(r, id))
+      send(r)
+    }
+    io.to(`u${id}`).emit('friends')
   }
   // Hosts put a proxy in front: take the client address it forwards.
   const clientIp = () => String(socket.handshake.headers['fly-client-ip'] ?? socket.handshake.headers['x-forwarded-for'] ?? socket.handshake.address).split(',')[0].trim()
@@ -415,7 +565,131 @@ io.on('connection', (socket) => {
     pushOnline()
   })
 
-  on('me', async (_, id) => ({ profile: id ? await profile(id) : null, online: online(), googleClientId: GOOGLE_CLIENT_ID }), false)
+  on('me', async (_, id) => ({
+    profile: id ? await profile(id) : null, online: online(), googleClientId: GOOGLE_CLIENT_ID,
+    mail: !!(BREVO_KEY && MAIL_FROM), contact: process.env.CONTACT_EMAIL ?? '', vapid: vapidPublic,
+  }), false)
+
+  // ---- account deletion (GDPR): anonymised so opponents' history stays consistent ----
+  on('account:delete', async (d, id) => {
+    const u = (await get('SELECT name FROM users WHERE id = ?', id))!
+    if (str(d.name).toLowerCase() !== String(u.name).toLowerCase()) throw new Error('Tape exactement ton pseudo pour confirmer')
+    const r = roomOf.get(id)
+    if (r && r.g.phase !== 'over') try { act(r, () => G.resign(r.g, colorOf(r, id))) } catch {}
+    leaveQueues(id)
+    await run("UPDATE users SET name = ?, email = ?, hash = '!', google_sub = NULL, avatar = NULL, layout = NULL WHERE id = ?", `supprimé-${id}`, `deleted-${id}@invalid`, id)
+    for (const sql of ['DELETE FROM sessions WHERE user_id = ?', 'DELETE FROM rewards WHERE user_id = ?', 'DELETE FROM push_subs WHERE user_id = ?', 'DELETE FROM password_resets WHERE user_id = ?'])
+      await run(sql, id)
+    await run('DELETE FROM friends WHERE user_id = ? OR friend_id = ?', id, id)
+    socket.leave(`u${id}`)
+    socket.data.userId = undefined
+    pushOnline()
+  })
+
+  // ---- forgotten password ----
+  on('password:forgot', async (d) => {
+    if (!BREVO_KEY || !MAIL_FROM) throw new Error('La réinitialisation par e-mail n’est pas encore activée')
+    const ip = clientIp(), recent = (resetAsks.get(ip) ?? []).filter((t) => t > Date.now() - 3_600_000)
+    if (recent.length >= 5) throw new Error('Trop de demandes, réessaie dans une heure')
+    resetAsks.set(ip, [...recent, Date.now()])
+    const u = await get("SELECT id, name, email FROM users WHERE email = ? AND email NOT LIKE 'deleted-%'", str(d.email))
+    if (u) {
+      const token = randomBytes(32).toString('hex')
+      await run('INSERT INTO password_resets VALUES (?, ?, ?)', sha256(token), u.id, Date.now() + 3_600_000)
+      const host = socket.handshake.headers['x-forwarded-host'] ?? socket.handshake.headers.host
+      const base = process.env.PUBLIC_URL || `${host?.toString().startsWith('localhost') ? 'http' : 'https'}://${host}`
+      await sendMail(u.email, 'Bluff Gambit : nouveau mot de passe',
+        `<p>Bonjour ${escapeHtml(u.name)},</p><p>Pour choisir un nouveau mot de passe, clique sur ce lien (valable 1 heure) :</p>
+        <p><a href="${base}/#/reset/${token}">${base}/#/reset/${token}</a></p><p>Si tu n'as rien demandé, ignore ce message.</p>`)
+    }
+    // Same answer either way: the form must not reveal which e-mails have an account.
+    return { sent: true }
+  }, false)
+
+  on('password:reset', async (d) => {
+    const row = await get('SELECT user_id, expires FROM password_resets WHERE token_hash = ?', sha256(str(d.token)))
+    if (!row || row.expires < Date.now()) throw new Error('Lien expiré ou déjà utilisé, refais une demande')
+    if (typeof d.password !== 'string' || d.password.length < 8) throw new Error('Mot de passe : 8 caractères minimum')
+    await run('UPDATE users SET hash = ? WHERE id = ?', hashPw(d.password), row.user_id)
+    await run('DELETE FROM password_resets WHERE user_id = ?', row.user_id)
+    await run('DELETE FROM sessions WHERE user_id = ?', row.user_id) // log out everywhere
+  }, false)
+
+  // ---- push subscriptions ----
+  on('push:subscribe', async (d, id) => {
+    const sub = d.sub as Row | undefined
+    if (!sub || typeof sub.endpoint !== 'string' || !sub.endpoint.startsWith('https://') || sub.endpoint.length > 1000) throw new Error('Abonnement invalide')
+    await run('INSERT OR REPLACE INTO push_subs VALUES (?, ?, ?)', sub.endpoint, id, JSON.stringify(sub))
+  })
+  on('push:unsubscribe', async (d, id) => { await run('DELETE FROM push_subs WHERE endpoint = ? AND user_id = ?', str(d.endpoint), id) })
+
+  // ---- friends ----
+  on('friends:list', async (_, id) => {
+    const rows = await all(`SELECT f.friend_id id, f.status, u.name, u.avatar, 'out' dir FROM friends f JOIN users u ON u.id = f.friend_id WHERE f.user_id = ?
+      UNION ALL SELECT f.user_id id, f.status, u.name, u.avatar, 'in' dir FROM friends f JOIN users u ON u.id = f.user_id WHERE f.friend_id = ? AND f.status = 'pending'`, id, id)
+    const decorate = (r: Row) => ({ id: r.id, name: r.name, avatar: r.avatar, online: isOnline(r.id), inGame: roomOf.has(r.id), live: roomOf.get(r.id)?.id ?? null })
+    return {
+      friends: rows.filter((r) => r.status === 'accepted').map(decorate),
+      incoming: rows.filter((r) => r.dir === 'in').map(decorate),
+      outgoing: rows.filter((r) => r.dir === 'out' && r.status === 'pending').map(decorate),
+    }
+  })
+  on('friends:add', async (d, id) => {
+    const u = await get("SELECT id FROM users WHERE name = ? AND email NOT LIKE 'deleted-%'", str(d.name))
+    if (!u || u.id === BOT_ID) throw new Error('Aucun joueur avec ce pseudo')
+    if (u.id === id) throw new Error('Tu ne peux pas t’ajouter toi-même')
+    const theirs = await get('SELECT status FROM friends WHERE user_id = ? AND friend_id = ?', u.id, id)
+    if (theirs) {
+      // They already asked us: adding them back accepts.
+      await run("UPDATE friends SET status = 'accepted' WHERE user_id = ? AND friend_id = ?", u.id, id)
+      await run("INSERT OR REPLACE INTO friends VALUES (?, ?, 'accepted', ?)", id, u.id, Date.now())
+    } else await run("INSERT OR IGNORE INTO friends VALUES (?, ?, 'pending', ?)", id, u.id, Date.now())
+    friendsChanged(id, u.id)
+  })
+  on('friends:accept', async (d, id) => {
+    const from = Number(d.id)
+    if (!(await get("SELECT 1 FROM friends WHERE user_id = ? AND friend_id = ? AND status = 'pending'", from, id))) throw new Error('Demande introuvable')
+    await run("UPDATE friends SET status = 'accepted' WHERE user_id = ? AND friend_id = ?", from, id)
+    await run("INSERT OR REPLACE INTO friends VALUES (?, ?, 'accepted', ?)", id, from, Date.now())
+    friendsChanged(id, from)
+  })
+  on('friends:remove', async (d, id) => {
+    const other = Number(d.id)
+    await run('DELETE FROM friends WHERE (user_id = ? AND friend_id = ?) OR (user_id = ? AND friend_id = ?)', id, other, other, id)
+    friendsChanged(id, other)
+  })
+  on('friends:invite', async (d, id) => {
+    const to = Number(d.id), m = minutesOf(d)
+    if (!(await get("SELECT 1 FROM friends WHERE user_id = ? AND friend_id = ? AND status = 'accepted'", id, to))) throw new Error('Ce joueur n’est pas dans tes amis')
+    notInGame(id)
+    if (!isOnline(to)) throw new Error('Ton ami n’est pas connecté')
+    if (roomOf.has(to)) throw new Error('Ton ami est déjà en partie')
+    const inviteId = randomBytes(8).toString('hex'), me = (await get('SELECT name, avatar FROM users WHERE id = ?', id))!
+    invites.set(inviteId, { from: id, to, minutes: m, exp: Date.now() + 60_000 })
+    io.to(`u${to}`).emit('invite', { id: inviteId, from: me.name, avatar: me.avatar, minutes: m })
+  })
+  on('invite:answer', async (d, id) => {
+    const inv = invites.get(str(d.id))
+    if (!inv || inv.to !== id || inv.exp < Date.now()) throw new Error('Invitation expirée')
+    invites.delete(str(d.id))
+    if (!d.accept) return void io.to(`u${inv.from}`).emit('invite:declined')
+    notInGame(id)
+    if (roomOf.has(inv.from)) throw new Error('Ton ami a déjà commencé une autre partie')
+    await startRoom(inv.from, id, inv.minutes, false, 'normal', true)
+  })
+
+  // ---- spectators ----
+  on('live:list', () => [...rooms.values()].filter((r) => !r.private && !r.done).map((r) => ({
+    id: r.id, names: r.names, avatars: r.avatars, minutes: r.minutes, ranked: r.ranked, bot: !!r.bot, phase: r.g.phase, spectators: spectatorsOf(r),
+  })), false)
+  on('spectate', (d) => {
+    const r = rooms.get(str(d.id))
+    if (!r || r.private) throw new Error('Cette partie n’est plus en cours')
+    for (const room of socket.rooms) if (room.startsWith('spec:')) socket.leave(room)
+    socket.join(`spec:${r.id}`)
+    send(r)
+  }, false)
+  on('unspectate', () => { for (const room of socket.rooms) if (room.startsWith('spec:')) socket.leave(room) }, false)
 
   on('password', async (d, id) => {
     const u = (await get('SELECT hash FROM users WHERE id = ?', id))!
@@ -428,7 +702,7 @@ io.on('connection', (socket) => {
   on('avatar', async (d, id) => {
     const a = avatarOf(d.avatar)
     if (!a) throw new Error('Photo inconnue')
-    if (a.special && !unlockedOf(await stats(id)).includes(`avatar:${a.key}`)) throw new Error('Photo pas encore débloquée')
+    if (a.special && !(await unlockedFor(id)).includes(`avatar:${a.key}`)) throw new Error('Photo pas encore débloquée')
     await run('UPDATE users SET avatar = ? WHERE id = ?', d.avatar, id)
     return profile(id)
   })
@@ -503,7 +777,7 @@ io.on('connection', (socket) => {
     if (!p) throw new Error('Code introuvable')
     if (p.host === id) throw new Error('Partage ce code à un ami')
     privates.delete(code)
-    await startRoom(p.host, id, p.minutes, false)
+    await startRoom(p.host, id, p.minutes, false, 'normal', true)
   })
 
   // ---- game ----
@@ -523,8 +797,14 @@ io.on('connection', (socket) => {
   socket.on('disconnect', () => {
     pushOnline()
     const id = socket.data.userId
-    if (id && !io.sockets.adapter.rooms.get(`u${id}`)?.size) leaveQueues(id)
+    if (id && !isOnline(id)) {
+      leaveQueues(id)
+      const r = roomOf.get(id)
+      if (r && r.g.phase !== 'over') markAway(r, colorOf(r, id))
+      friendsChanged(id)
+    }
   })
 })
 
+await restoreRooms()
 server.listen(PORT, () => console.log(`Bluff Gambit : http://localhost:${PORT}`))

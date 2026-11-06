@@ -184,9 +184,9 @@ export function mark(g: Game, c: Color, pieceId: unknown, kind: unknown): string
   return null
 }
 
-export function resign(g: Game, c: Color): string | null {
+export function resign(g: Game, c: Color, reason = 'abandon'): string | null {
   if (g.phase === 'over') return 'Partie terminée'
-  end(g, opp(c), 'abandon')
+  end(g, opp(c), reason)
   return null
 }
 
@@ -242,3 +242,12 @@ export function view(g: Game, c: Color) {
   }
 }
 export type View = ReturnType<typeof view>
+
+/** What a spectator sees: like a player, but no hidden kind on either side until the end. */
+export function spectatorView(g: Game) {
+  const v = view(g, 'w'), over = g.phase === 'over'
+  return {
+    ...v, marks: {}, canMark: false,
+    pieces: v.pieces.map((p) => (over ? p : { id: p.id, owner: p.owner, x: p.x, y: p.y })),
+  }
+}

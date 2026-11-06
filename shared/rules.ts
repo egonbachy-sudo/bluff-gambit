@@ -140,6 +140,7 @@ export const AVATARS_BASE = ['🦊', '🐺', '🐱', '🐼', '🦁', '🐯', '�
 export const AVATARS_SPECIAL: Record<string, { emoji: string; label: string }> = {
   masque: { emoji: '🎭', label: 'Masque' }, joker: { emoji: '🃏', label: 'Joker' }, oeil: { emoji: '👁️', label: 'Œil' },
   diamant: { emoji: '💎', label: 'Diamant' }, couronne: { emoji: '👑', label: 'Couronne' }, dragon: { emoji: '🐉', label: 'Dragon' },
+  champion: { emoji: '🏆', label: 'Champion' },
 }
 export function avatarOf(id: unknown): { emoji: string; special: boolean; key: string } | null {
   if (typeof id !== 'string') return null
@@ -178,5 +179,5 @@ const MONTHS = ['janvier', 'février', 'mars', 'avril', 'mai', 'juin', 'juillet'
 /** Seasons are calendar months (UTC). */
 export function seasonOf(t = Date.now()) {
   const d = new Date(t), y = d.getUTCFullYear(), m = d.getUTCMonth()
-  return { label: `Saison de ${MONTHS[m]} ${y}`, start: Date.UTC(y, m, 1), end: Date.UTC(y, m + 1, 1) }
+  return { key: `${y}-${String(m + 1).padStart(2, '0')}`, label: `Saison de ${MONTHS[m]} ${y}`, start: Date.UTC(y, m, 1), end: Date.UTC(y, m + 1, 1) }
 }
