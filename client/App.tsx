@@ -1,17 +1,19 @@
-import { useCallback, useEffect, useState } from 'react'
-import type { CSSProperties, FormEvent } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import type { FormEvent } from 'react'
 import { call, getToken, saveToken, socket } from './net.ts'
 import { Game } from './Game.tsx'
 import type { GameView } from './Game.tsx'
-import { PieceIcon, glyph } from './Board.tsx'
+import { Board, PieceIcon, reducedMotion } from './Board.tsx'
+import type { BoardPiece, Skins } from './Board.tsx'
 import { Tutorial } from './Tutorial.tsx'
 import { layoutError, levelOf, placementLayout, randomSetup, BOARD_SKINS, DEFAULT_LAYOUT, KINDS, NAMES, PIECE_SKINS, QUESTS, TIME_CONTROLS } from '../shared/rules.ts'
-import type { Kind } from '../shared/rules.ts'
+import type { Kind, Sq } from '../shared/rules.ts'
 
 type Profile = {
   id: number; name: string; email: string; elo: number; piece_skin: string; board_skin: string; layout: string
   stats: Record<string, number>; level: number; unlocked: string[]; inGame: boolean
 }
+type Online = { players: number; visitors: number }
 type Settings = { theme: string; hints: boolean; sound: boolean }
 const THEMES: Record<string, string> = { jour: 'Jour', nuit: 'Nuit', vert: 'Vert clair', amethyste: 'Mauve améthyste' }
 const DEFAULTS: Settings = { theme: 'nuit', hints: true, sound: true }
@@ -29,7 +31,8 @@ const NAV: [string, string][] = [['/jouer', 'Jouer'], ['/tutoriel', 'Tutoriel'],
 export function App() {
   const [page, setPage] = useState(route)
   const [me, setMe] = useState<Profile | null>(null)
-  const [online, setOnline] = useState(0)
+  const [online, setOnline] = useState<Online>({ players: 0, visitors: 0 })
+  const [settingsOpen, setSettingsOpen] = useState(false)
   const [view, setView] = useState<GameView | null>(null)
   const [emote, setEmote] = useState('')
   const [settings, setSettings] = useState(loadSettings)
@@ -44,7 +47,7 @@ export function App() {
   }, [settings])
 
   const refresh = useCallback(() => {
-    call<{ profile: Profile | null; online: number }>('me').then((r) => {
+    call<{ profile: Profile | null; online: Online }>('me').then((r) => {
       setMe(r.profile)
       setOnline(r.online)
     }).catch(() => {})
@@ -53,6 +56,7 @@ export function App() {
   useEffect(() => {
     let t: ReturnType<typeof setTimeout>
     const onHash = () => {
+      if (route() === '/parametres') return setSettingsOpen(true)
       setPage(route())
       scrollTo({ top: 0 })
     }
@@ -70,6 +74,7 @@ export function App() {
     socket.on('game', onGame)
     socket.on('emote', onEmote)
     socket.on('saved', refresh) // the finished game is stored: stats and quests changed
+    socket.on('online', setOnline)
     if (socket.connected) refresh()
     return () => {
       removeEventListener('hashchange', onHash)
@@ -77,6 +82,7 @@ export function App() {
       socket.off('game', onGame)
       socket.off('emote', onEmote)
       socket.off('saved', refresh)
+      socket.off('online', setOnline)
     }
   }, [refresh])
 
@@ -93,10 +99,9 @@ export function App() {
   else if (page === '/classements') body = <Leaderboards me={me} />
   else if (page === '/perso') body = <Customize me={me} setMe={setMe} />
   else if (page === '/compte') body = <Account me={me} setMe={setMe} />
-  else if (page === '/parametres') body = <SettingsPage s={settings} set={setSettings} />
   else if (page === '/regles') body = <Rules />
   else if (page === '/tutoriel') body = <Tutorial skins={skins} loggedIn={!!me} />
-  else body = <Home me={me} online={online} view={view} skin={skins.pieces} />
+  else body = <Home me={me} online={online} view={view} skins={skins} />
 
   return (
     <div className={`app ${page === '/partie' ? 'in-game' : ''}`}>
@@ -107,7 +112,7 @@ export function App() {
         </nav>
         <div className="top-actions">
           {view && view.phase !== 'over' && page !== '/partie' && <a href="#/partie" className="btn primary small pulse">Partie en cours</a>}
-          <a href="#/parametres" className="icon-btn" aria-label="Paramètres">⚙</a>
+          <button className={`icon-btn ${settingsOpen ? 'open' : ''}`} aria-label="Paramètres" aria-expanded={settingsOpen} onClick={() => setSettingsOpen(!settingsOpen)}>⚙</button>
           {me ? (
             <a href="#/compte" className={`account ${page === '/compte' ? 'current' : ''}`}>
               <span className="avatar" aria-hidden="true">{me.name[0]?.toUpperCase()}</span>
@@ -119,33 +124,129 @@ export function App() {
         </div>
       </header>
       <div key={page} className="page-anim">{body}</div>
+      {settingsOpen && <SettingsModal s={settings} set={setSettings} close={() => setSettingsOpen(false)} />}
     </div>
   )
 }
 
-const at = (c: number, r: number) => ({ '--c': c, '--r': r }) as CSSProperties
-/** Decorative loop: a hidden piece bluffs a diagonal, gets contested and is revealed as a knight. */
-function HeroBoard({ skin }: { skin: string }) {
-  const white: Kind[] = ['R', 'N', 'K', 'B', 'R']
+// ---------- home: animated board that loops random scenes showing every mechanic ----------
+const HF = 'abcdefgh'
+const hsq = (n: string): Sq => ({ x: HF.indexOf(n[0]), y: Number(n[1]) - 1 })
+/** Enemy pieces are hidden: the real kind only shows when a scene reveals it. */
+const HERO_BASE = ['wKe1', 'wQd1', 'wRa1', 'wNg1', 'wBc1', 'wPd4', 'wPe4', 'wPf2', 'wPb7', 'bKa8', 'bQd8', 'bRe8', 'bNc6', 'bPd5', 'bPf7', 'bPh7', 'bBg7']
+type HeroApi = {
+  move: (spec: string, to: string, claim?: Kind) => void
+  reveal: (spec: string) => void
+  remove: (spec: string) => void
+  setKind: (spec: string, kind: Kind) => void
+  mark: (spec: string, kind: Kind) => void
+  badge: (text: string, tone?: string) => void
+  skins: (s: Skins | null) => void
+  wait: (ms: number) => Promise<void>
+}
+const SCENES: ((h: HeroApi) => Promise<void>)[] = [
+  async (h) => { // bluff caught
+    h.move('bNc6', 'c3'); await h.wait(900)
+    h.badge('Bluff ?'); await h.wait(1300)
+    h.badge('Démasqué ! −1 ❤', 'danger'); h.reveal('bNc6'); await h.wait(1300)
+    h.remove('bNc6'); await h.wait(900)
+  },
+  async (h) => { // wrong contest
+    h.move('wNg1', 'f3', 'N'); await h.wait(900)
+    h.badge('Contesté…'); await h.wait(1200)
+    h.badge('Coup légal ✓ L’adversaire perd 1 vie', 'success'); await h.wait(1600)
+  },
+  async (h) => { // capture
+    h.move('wPe4', 'd5', 'P'); h.remove('bPd5'); await h.wait(300)
+    h.badge('Prise !'); await h.wait(1500)
+  },
+  async (h) => { // successful bluff
+    h.move('wPf2', 'f5', 'Q'); await h.wait(900)
+    h.badge('Un pion joué en dame…'); await h.wait(1400)
+    h.badge('Personne ne conteste 😏', 'success'); await h.wait(1400)
+  },
+  async (h) => { // marking
+    h.badge('Marquage 🏷'); await h.wait(700)
+    h.mark('bPh7', 'P'); await h.wait(700)
+    h.mark('bQd8', 'Q'); await h.wait(700)
+    h.mark('bBg7', 'B'); await h.wait(1200)
+  },
+  async (h) => { // promotion
+    h.move('wPb7', 'b8', 'P'); await h.wait(800)
+    h.setKind('wPb7', 'Q'); h.badge('Promotion !', 'success'); await h.wait(1600)
+  },
+  async (h) => { // customisation
+    h.badge('Personnalise ton jeu ✨')
+    for (const s of [{ pieces: 'neon', board: 'amethyste' }, { pieces: 'or', board: 'marbre' }, { pieces: 'contour', board: 'ocean' }, { pieces: 'lettres', board: 'bois' }]) {
+      h.skins(s)
+      await h.wait(1000)
+    }
+  },
+  async (h) => { // king capture
+    h.badge('Le roi se cache en a8…'); await h.wait(1200)
+    h.reveal('bKa8'); await h.wait(500)
+    h.move('wRa1', 'a8', 'R'); h.remove('bKa8'); await h.wait(400)
+    h.badge('Roi capturé : victoire ! 🏆', 'success'); await h.wait(1600)
+  },
+]
+
+function HeroBoard({ skins }: { skins: Skins }) {
+  const gen = useRef(0)
+  const make = (): BoardPiece[] => HERO_BASE.map((s) => ({ id: `${s}-${gen.current}`, owner: s[0] as 'w' | 'b', kind: s[0] === 'w' ? (s[1] as Kind) : undefined, ...hsq(s.slice(2)) }))
+  const [pieces, setPieces] = useState<BoardPiece[]>(make)
+  const [badge, setBadge] = useState<{ text: string; tone: string } | null>(null)
+  const [last, setLast] = useState<Sq[] | null>(null)
+  const [skin, setSkin] = useState<Skins | null>(null)
+
+  useEffect(() => {
+    if (reducedMotion()) return
+    let alive = true
+    const id = (spec: string) => `${spec}-${gen.current}`
+    const edit = (spec: string, f: (p: BoardPiece) => BoardPiece | null) =>
+      setPieces((ps) => ps.flatMap((p) => (p.id === id(spec) ? (f(p) ?? []) : [p])))
+    const h: HeroApi = {
+      move: (spec, to, claim) => edit(spec, (p) => {
+        setLast([{ x: p.x, y: p.y }, hsq(to)])
+        return { ...p, ...hsq(to), claim }
+      }),
+      reveal: (spec) => edit(spec, (p) => ({ ...p, kind: spec[1] as Kind, mark: undefined })),
+      remove: (spec) => edit(spec, () => null),
+      setKind: (spec, kind) => edit(spec, (p) => ({ ...p, kind })),
+      mark: (spec, kind) => edit(spec, (p) => ({ ...p, mark: kind })),
+      badge: (text, tone = '') => setBadge({ text, tone }),
+      skins: setSkin,
+      wait: (ms) => new Promise((r) => setTimeout(r, ms)),
+    }
+    ;(async () => {
+      let prev = -1
+      await h.wait(1200)
+      while (alive) {
+        let n = prev
+        while (n === prev) n = Math.floor(Math.random() * SCENES.length)
+        prev = n
+        await SCENES[n](h)
+        if (!alive) return
+        setBadge(null)
+        await h.wait(500)
+        gen.current++ // fresh ids: the starting position pops back in
+        setPieces(make())
+        setLast(null)
+        setSkin(null)
+        await h.wait(1300)
+      }
+    })()
+    return () => { alive = false }
+  }, [])
+
   return (
     <div className="hero-board" aria-hidden="true">
-      {Array.from({ length: 25 }, (_, i) => <span key={i} className={`hsq ${i % 2 ? 'dark' : 'light'}`} />)}
-      {[0, 1, 2, 3, 4].map((c) => <span key={`t${c}`} className="hpiece" style={at(c, 0)}><span className="token b">?</span></span>)}
-      {[0, 3, 4].map((c) => <span key={`u${c}`} className="hpiece" style={at(c, 1)}><span className="token b">?</span></span>)}
-      {white.map((k, c) => <span key={`w${c}`} className="hpiece" style={at(c, 4)}><PieceIcon kind={k} owner="w" skin={skin} /></span>)}
-      <span className="hpiece mover">
-        <span className="flip">
-          <span className="face token b">?</span>
-          <span className="face back pc b">{glyph('N', skin)}</span>
-        </span>
-      </span>
-      <span className="hbadge bluff">Bluff ?</span>
-      <span className="hbadge caught">Démasqué !</span>
+      <Board me="w" pieces={pieces} skins={skin ?? skins} last={last}
+        overlay={badge && <span key={badge.text} className={`hero-badge ${badge.tone}`}>{badge.text}</span>} />
     </div>
   )
 }
 
-function Home({ me, online, view, skin }: { me: Profile | null; online: number; view: GameView | null; skin: string }) {
+function Home({ me, online, view, skins }: { me: Profile | null; online: Online; view: GameView | null; skins: Skins }) {
   const [err, setErr] = useState('')
   const bot = () => call('bot:start', { minutes: 5 }).catch((e: Error) => setErr(e.message))
   const st = me?.stats
@@ -156,7 +257,7 @@ function Home({ me, online, view, skin }: { me: Profile | null; online: number; 
         <div className="hero-text">
           <p className="eyebrow">Échecs · bluff · information cachée</p>
           <h1>Les échecs où chaque pièce <em>peut mentir</em>.</h1>
-          <p className="lead">Place tes pièces en secret, fais passer un pion pour une dame, et démasque les bluffs adverses avant de perdre tes 10 vies.</p>
+          <p className="lead">Place tes pièces en secret, fais passer un pion pour une dame, et démasque les bluffs adverses.</p>
           <div className="row cta">
             {view && view.phase !== 'over' ? (
               <a className="btn primary big" href="#/partie">Reprendre la partie</a>
@@ -173,9 +274,12 @@ function Home({ me, online, view, skin }: { me: Profile | null; online: number; 
             )}
           </div>
           {err && <p className="warn" role="alert">{err}</p>}
-          <p className="online"><span className="dot" aria-hidden="true" /> {online} joueur{online > 1 ? 's' : ''} en ligne</p>
+          <p className="online">
+            <span className="dot" aria-hidden="true" /> {online.players} joueur{online.players > 1 ? 's' : ''} connecté{online.players > 1 ? 's' : ''}
+            {online.visitors > 0 && <span className="muted"> · {online.visitors} visiteur{online.visitors > 1 ? 's' : ''}</span>}
+          </p>
         </div>
-        <HeroBoard skin={skin} />
+        <HeroBoard skins={skins} />
       </section>
 
       {me && st && (
@@ -539,11 +643,19 @@ function Account({ me, setMe }: { me: Profile | null; setMe: (p: Profile | null)
   )
 }
 
-function SettingsPage({ s, set }: { s: Settings; set: (s: Settings) => void }) {
+function SettingsModal({ s, set, close }: { s: Settings; set: (s: Settings) => void; close: () => void }) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && close()
+    addEventListener('keydown', onKey)
+    return () => removeEventListener('keydown', onKey)
+  }, [close])
   return (
-    <main className="page">
-      <h1>Paramètres</h1>
-      <section className="card">
+    <div className="modal" onClick={(e) => e.target === e.currentTarget && close()}>
+      <div className="card settings" role="dialog" aria-modal="true" aria-label="Paramètres">
+        <div className="settings-head">
+          <h2>Paramètres</h2>
+          <button className="icon-btn" aria-label="Fermer" onClick={close}>✕</button>
+        </div>
         <h3>Thème</h3>
         <div className="themes">
           {Object.entries(THEMES).map(([k, l]) => (
@@ -552,12 +664,11 @@ function SettingsPage({ s, set }: { s: Settings; set: (s: Settings) => void }) {
             </button>
           ))}
         </div>
-      </section>
-      <section className="card">
+        <h3>Partie</h3>
         <label className="check"><input type="checkbox" checked={s.hints} onChange={(e) => set({ ...s, hints: e.target.checked })} /> Afficher les coups possibles</label>
         <label className="check"><input type="checkbox" checked={s.sound} onChange={(e) => set({ ...s, sound: e.target.checked })} /> Sons</label>
-      </section>
-    </main>
+      </div>
+    </div>
   )
 }
 

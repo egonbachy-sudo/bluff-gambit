@@ -232,10 +232,25 @@ const BOARDS: Record<string, string> = {
 }
 
 // ---------- sockets ----------
+/** Distinct signed-in players, plus open tabs that are not signed in. */
+function online() {
+  const players = new Set<number>()
+  let visitors = 0
+  for (const s of io.sockets.sockets.values()) s.data.userId ? players.add(s.data.userId) : visitors++
+  return { players: players.size, visitors }
+}
+let onlineTimer: NodeJS.Timeout | undefined
+const pushOnline = () => {
+  clearTimeout(onlineTimer)
+  onlineTimer = setTimeout(() => io.emit('online', online()), 300)
+}
+
 io.on('connection', (socket) => {
+  pushOnline()
   const login = (id: number) => {
     socket.data.userId = id
     socket.join(`u${id}`)
+    pushOnline()
     const r = roomOf.get(id)
     if (r) send(r)
   }
@@ -292,9 +307,10 @@ io.on('connection', (socket) => {
     leaveQueues(id)
     socket.leave(`u${id}`)
     socket.data.userId = undefined
+    pushOnline()
   })
 
-  on('me', async (_, id) => ({ profile: id ? await profile(id) : null, online: io.engine.clientsCount }), false)
+  on('me', async (_, id) => ({ profile: id ? await profile(id) : null, online: online() }), false)
 
   on('password', async (d, id) => {
     const u = (await get('SELECT hash FROM users WHERE id = ?', id))!
@@ -390,6 +406,7 @@ io.on('connection', (socket) => {
   })
 
   socket.on('disconnect', () => {
+    pushOnline()
     const id = socket.data.userId
     if (id && !io.sockets.adapter.rooms.get(`u${id}`)?.size) leaveQueues(id)
   })

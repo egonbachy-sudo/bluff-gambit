@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { beep, call } from './net.ts'
-import { Board, PieceIcon } from './Board.tsx'
+import { Board, KindPicker, PieceIcon } from './Board.tsx'
 import type { BoardPiece, Skins } from './Board.tsx'
-import { classicSetup, destinations, homeRows, lastRank, layoutPlacement, opp, randomSetup, setupError, sqName, EMOTES, KINDS, NAMES } from '../shared/rules.ts'
+import { classicSetup, destinations, homeRows, lastRank, layoutPlacement, opp, randomSetup, setupError, sqName, EMOTES, NAMES } from '../shared/rules.ts'
 import type { Color, Kind, Placement, Sq } from '../shared/rules.ts'
 import type { View } from '../server/game.ts'
 
@@ -40,19 +40,23 @@ export function Game({ v, skins, layout, sound, hints, emote, onLeave }: {
   const [as, setAs] = useState<Kind>('P')
   const [marking, setMarking] = useState(false)
   const [markTarget, setMarkTarget] = useState<string | null>(null)
+  const [markAsked, setMarkAsked] = useState(false)
   const [promo, setPromo] = useState<Sq | null>(null)
   const [pl, setPl] = useState<SetupPiece[]>(() => withIds(layoutPlacement(me, layout)))
   const [swap, setSwap] = useState<Sq | null>(null)
   const [err, setErr] = useState('')
   const [showEnd, setShowEnd] = useState(true)
   const graves = useRef<Record<Color, HTMLDivElement | null>>({ w: null, b: null })
+  const skipMarkPrompt = useRef(false) // a declined mark prompt waits one turn before asking again
 
   useEffect(() => {
     setSel(null)
     setMarking(false)
     setMarkTarget(null)
+    setMarkAsked(skipMarkPrompt.current && v.phase === 'move' && v.turn === me)
+    if (v.phase === 'move' && v.turn === me) skipMarkPrompt.current = false
     setPromo(null)
-  }, [v.turn, v.phase])
+  }, [v.turn, v.phase, me])
   useEffect(() => {
     if (sound && v.phase === 'challenge' && v.turn === me) beep(880)
   }, [v.phase, v.turn, me, sound])
@@ -65,7 +69,7 @@ export function Game({ v, skins, layout, sound, hints, emote, onLeave }: {
     return (x: number, y: number) => m.get(x * 8 + y) ?? null
   }, [pieces])
   const selected = pieces.find((p) => p.id === sel)
-  const dests = selected && myTurn ? destinations(as, me, selected, occ, !!selected.moved) : []
+  const dests = selected && myTurn && !promo ? destinations(as, me, selected, occ, !!selected.moved) : []
   const promoKinds = [...new Set(v.captured[me].filter((k) => k !== 'P' && k !== 'K'))]
   const setupErr = setupMode ? setupError(me, pl) : null
   const boardPieces: BoardPiece[] = useMemo(
@@ -93,9 +97,10 @@ export function Game({ v, skins, layout, sound, hints, emote, onLeave }: {
       if (p?.owner === foe) setMarkTarget(p.id)
       return
     }
-    if (!myTurn) return
+    if (!myTurn || promo) return
     if (p?.owner === me) {
-      setSel(p.id)
+      setMarkAsked(true)
+      setSel(p.id === sel ? null : p.id)
       setAs(p.kind!)
       return
     }
@@ -105,17 +110,6 @@ export function Game({ v, skins, layout, sound, hints, emote, onLeave }: {
     }
     setSel(null)
   }
-
-  const picker = (kinds: Kind[], cur: Kind | null, pick: (k: Kind) => void, real?: Kind) => (
-    <div className="picker">
-      {kinds.map((k) => (
-        <button key={k} className={k === cur ? 'on' : ''} onClick={() => pick(k)}>
-          <PieceIcon kind={k} owner={me} skin={skins.pieces} /> {NAMES[k]}
-          {k === real && <small> (vraie)</small>}
-        </button>
-      ))}
-    </div>
-  )
 
   function bar(c: Color) {
     const active = (v.phase === 'move' || v.phase === 'challenge') && v.turn === c
@@ -137,6 +131,73 @@ export function Game({ v, skins, layout, sound, hints, emote, onLeave }: {
   }
 
   const left = (ms: number) => Math.ceil(Math.max(0, ms - (now - v.at)) / 1000)
+
+  // Popover above a piece: what to imitate, what to mark, what to promote into.
+  const markPiece = pieces.find((p) => p.id === markTarget)
+  let popover: { at: Sq; content: ReactNode } | null = null
+  if (promo)
+    popover = {
+      at: promo,
+      content: (
+        <>
+          <p className="pop-title">Promotion</p>
+          <KindPicker kinds={promoKinds} owner={me} skin={skins.pieces} onPick={(k) => play(promo, k)} />
+          <button className="small" onClick={() => play(promo)}>Rester pion</button>
+        </>
+      ),
+    }
+  else if (markPiece)
+    popover = {
+      at: markPiece,
+      content: (
+        <>
+          <p className="pop-title">Marquer comme…</p>
+          <KindPicker owner={foe} skin={skins.pieces} cur={v.marks[markPiece.id]} onPick={(k) => {
+            send('game:mark', { pieceId: markPiece.id, kind: k })
+            setMarking(false)
+            setMarkTarget(null)
+          }} />
+        </>
+      ),
+    }
+  else if (selected && myTurn)
+    popover = {
+      at: selected,
+      content: (
+        <>
+          <p className="pop-title">Jouer comme…</p>
+          <KindPicker owner={me} skin={skins.pieces} cur={as} real={selected.kind} onPick={setAs} />
+        </>
+      ),
+    }
+
+  // Prompts over the board: contest the last move, then (1 turn out of 2) mark a piece.
+  let overlay: ReactNode = null
+  if (v.phase === 'challenge' && v.turn === me)
+    overlay = (
+      <div className="prompt" role="alertdialog" aria-label="Contester le coup adverse">
+        <p className="prompt-title">Veux-tu contester ?</p>
+        <p>L'adversaire a joué <b>{v.last && `${sqName(v.last.from)} → ${sqName(v.last.to)}`}</b>{v.last?.capture ? ' en prenant une pièce' : ''}.</p>
+        <div className="timer" style={{ animationDuration: `${Math.max(0, v.windowLeft)}ms` }} aria-hidden="true" />
+        <div className="row">
+          <button className="danger-fill" onClick={() => send('game:challenge', { contest: true })}>Oui, contester</button>
+          <button onClick={() => send('game:challenge', { contest: false })}>Non</button>
+        </div>
+        <small className="muted">Plus que {left(v.windowLeft)} s</small>
+      </div>
+    )
+  else if (myTurn && v.canMark && !markAsked && !marking)
+    overlay = (
+      <div className="prompt" role="dialog" aria-label="Marquer une pièce">
+        <p className="prompt-title">Marquer une pièce adverse ?</p>
+        <p className="muted">Possible 1 tour sur 2, pour te souvenir de ce que tu soupçonnes.</p>
+        <div className="row">
+          <button className="primary" onClick={() => { setMarkAsked(true); setMarking(true) }}>Oui, marquer</button>
+          <button onClick={() => { setMarkAsked(true); skipMarkPrompt.current = true }}>Non</button>
+        </div>
+      </div>
+    )
+
   let controls: ReactNode
   if (setupMode)
     controls = (
@@ -153,50 +214,18 @@ export function Game({ v, skins, layout, sound, hints, emote, onLeave }: {
       </>
     )
   else if (v.phase === 'setup') controls = <p className="waiting">En attente du placement adverse… ({left(v.setupLeft)} s)</p>
-  else if (v.phase === 'challenge' && v.turn === me)
-    controls = (
-      <div className="challenge">
-        <p>
-          L'adversaire a joué <b>{v.last && `${sqName(v.last.from)} → ${sqName(v.last.to)}`}</b>. Bluff ?
-        </p>
-        <div className="timer" style={{ animationDuration: `${Math.max(0, v.windowLeft)}ms` }} aria-hidden="true" />
-        <div className="row">
-          <button className="danger" onClick={() => send('game:challenge', { contest: true })}>Contester</button>
-          <button onClick={() => send('game:challenge', { contest: false })}>Laisser passer</button>
-          <span className="muted">{left(v.windowLeft)} s</span>
-        </div>
-      </div>
-    )
+  else if (v.phase === 'challenge' && v.turn === me) controls = <p className="your-turn">L'adversaire vient de jouer : contester ou non ?</p>
   else if (v.phase === 'challenge') controls = <p className="waiting">L'adversaire peut contester ton coup… ({left(v.windowLeft)} s)</p>
   else if (myTurn)
     controls = (
       <>
-        {promo ? (
-          <>
-            <p>Promotion : choisis une pièce de ton cimetière.</p>
-            {picker(promoKinds, null, (k) => play(promo, k))}
-            <button onClick={() => play(promo)}>Rester pion</button>
-          </>
-        ) : markTarget ? (
-          <>
-            <p>Marquer cette pièce comme…</p>
-            {picker(KINDS, v.marks[markTarget] ?? null, (k) => {
-              send('game:mark', { pieceId: markTarget, kind: k })
-              setMarking(false)
-              setMarkTarget(null)
-            })}
-          </>
-        ) : marking ? (
-          <p>Touche une pièce adverse à marquer. <button onClick={() => setMarking(false)}>Annuler</button></p>
-        ) : selected ? (
-          <>
-            <p>Jouer cette pièce comme :</p>
-            {picker(KINDS, as, setAs, selected.kind)}
-          </>
-        ) : (
-          <p className="your-turn">À toi de jouer : touche une de tes pièces.</p>
-        )}
-        {v.canMark && !marking && !promo && <button onClick={() => { setSel(null); setMarking(true) }}>🏷 Marquer une pièce</button>}
+        <p className="your-turn">
+          {marking ? 'Touche une pièce adverse à marquer.' : selected ? 'Choisis au-dessus de ta pièce ce qu’elle imite, puis touche une case.' : 'À toi de jouer : touche une de tes pièces.'}
+        </p>
+        <div className="row">
+          {marking && <button onClick={() => { setMarking(false); setMarkTarget(null) }}>Annuler le marquage</button>}
+          {v.canMark && !marking && markAsked && <button onClick={() => { setSel(null); setMarking(true) }}>🏷 Marquer une pièce</button>}
+        </div>
       </>
     )
   else if (v.phase === 'move') controls = <p className="waiting">L'adversaire réfléchit…</p>
@@ -210,6 +239,7 @@ export function Game({ v, skins, layout, sound, hints, emote, onLeave }: {
           me={me} pieces={boardPieces} skins={skins} onSquare={click} hints={hints}
           sel={setupMode ? swap : selected} dests={dests} last={v.last ? [v.last.from, v.last.to] : null}
           home={setupMode ? homeRows(me) : undefined} captured={v.captured} graveOf={(c) => graves.current[c]}
+          popover={popover} overlay={overlay}
         />
         {bar(me)}
       </div>
