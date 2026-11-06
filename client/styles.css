@@ -442,6 +442,7 @@ progress::-moz-progress-bar { background: linear-gradient(90deg, var(--accent), 
 .tuto-list li:nth-child(4) { animation-delay: 0.15s; } .tuto-list li:nth-child(5) { animation-delay: 0.2s; } .tuto-list li:nth-child(6) { animation-delay: 0.25s; }
 @keyframes pop-in { from { opacity: 0; scale: 0.85; } }
 
-.google-btn { display: flex; justify-content: center; min-height: 44px; }
+/* Google draws its button in an iframe: a dark page colour-scheme would paint a white box behind it. */
+.google-btn { display: flex; justify-content: center; min-height: 44px; color-scheme: light; }
 .or { display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: 0.85rem; }
 .or::before, .or::after { content: ''; flex: 1; height: 1px; background: var(--border); }
