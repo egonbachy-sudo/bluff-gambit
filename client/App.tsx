@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import type { FormEvent } from 'react'
 import { call, getToken, saveToken, socket } from './net.ts'
 import { Game } from './Game.tsx'
@@ -190,25 +190,26 @@ const SCENES: ((h: HeroApi) => Promise<void>)[] = [
   },
 ]
 
+// Stable ids: between scenes the pieces glide back home instead of all popping out and in.
+const heroStart = (): BoardPiece[] => HERO_BASE.map((s) => ({ id: s, owner: s[0] as 'w' | 'b', kind: s[0] === 'w' ? (s[1] as Kind) : undefined, ...hsq(s.slice(2)) }))
+
 function HeroBoard({ skins }: { skins: Skins }) {
-  const gen = useRef(0)
-  const make = (): BoardPiece[] => HERO_BASE.map((s) => ({ id: `${s}-${gen.current}`, owner: s[0] as 'w' | 'b', kind: s[0] === 'w' ? (s[1] as Kind) : undefined, ...hsq(s.slice(2)) }))
-  const [pieces, setPieces] = useState<BoardPiece[]>(make)
-  const [badge, setBadge] = useState<{ text: string; tone: string } | null>(null)
+  const [pieces, setPieces] = useState<BoardPiece[]>(heroStart)
+  const [badge, setBadge] = useState<{ text: string; tone: string; leaving?: boolean } | null>(null)
   const [last, setLast] = useState<Sq[] | null>(null)
   const [skin, setSkin] = useState<Skins | null>(null)
 
   useEffect(() => {
     if (reducedMotion()) return
     let alive = true
-    const id = (spec: string) => `${spec}-${gen.current}`
     const edit = (spec: string, f: (p: BoardPiece) => BoardPiece | null) =>
-      setPieces((ps) => ps.flatMap((p) => (p.id === id(spec) ? (f(p) ?? []) : [p])))
+      setPieces((ps) => ps.flatMap((p) => (p.id === spec ? (f(p) ?? []) : [p])))
     const h: HeroApi = {
-      move: (spec, to, claim) => edit(spec, (p) => {
-        setLast([{ x: p.x, y: p.y }, hsq(to)])
-        return { ...p, ...hsq(to), claim }
-      }),
+      move: (spec, to, claim) => {
+        const from = hsq(HERO_BASE.find((s) => s === spec)!.slice(2))
+        setLast([from, hsq(to)])
+        edit(spec, (p) => ({ ...p, ...hsq(to), claim }))
+      },
       reveal: (spec) => edit(spec, (p) => ({ ...p, kind: spec[1] as Kind, mark: undefined })),
       remove: (spec) => edit(spec, () => null),
       setKind: (spec, kind) => edit(spec, (p) => ({ ...p, kind })),
@@ -226,13 +227,13 @@ function HeroBoard({ skins }: { skins: Skins }) {
         prev = n
         await SCENES[n](h)
         if (!alive) return
+        setBadge((b) => b && { ...b, leaving: true })
+        await h.wait(350)
         setBadge(null)
-        await h.wait(500)
-        gen.current++ // fresh ids: the starting position pops back in
-        setPieces(make())
         setLast(null)
         setSkin(null)
-        await h.wait(1300)
+        setPieces(heroStart())
+        await h.wait(1600)
       }
     })()
     return () => { alive = false }
@@ -241,7 +242,7 @@ function HeroBoard({ skins }: { skins: Skins }) {
   return (
     <div className="hero-board" aria-hidden="true">
       <Board me="w" pieces={pieces} skins={skin ?? skins} last={last}
-        overlay={badge && <span key={badge.text} className={`hero-badge ${badge.tone}`}>{badge.text}</span>} />
+        overlay={badge && <span key={badge.text} className={`hero-badge ${badge.tone} ${badge.leaving ? 'leaving' : ''}`}>{badge.text}</span>} />
     </div>
   )
 }
