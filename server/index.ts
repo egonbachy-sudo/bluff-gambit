@@ -7,7 +7,7 @@ import { all, get, run } from './db.ts'
 import type { Row } from './db.ts'
 import * as G from './game.ts'
 import * as Bot from './bot.ts'
-import { layoutError, layoutPlacement, opp, randomSetup, levelOf, DEFAULT_LAYOUT, CHALLENGE_SECONDS, DEFAULT_UNLOCKS, EMOTES, QUESTS, TIME_CONTROLS } from '../shared/rules.ts'
+import { nameError, layoutError, layoutPlacement, opp, randomSetup, levelOf, DEFAULT_LAYOUT, CHALLENGE_SECONDS, DEFAULT_UNLOCKS, EMOTES, QUESTS, TIME_CONTROLS } from '../shared/rules.ts'
 import type { Color } from '../shared/rules.ts'
 
 const PORT = Number(process.env.PORT ?? 3000)
@@ -83,6 +83,25 @@ type Room = {
 const roomOf = new Map<number, Room>()
 const starting = new Set<number>() // players matched while their room is being created
 const loginFails = new Map<string, number[]>() // shortcut: in-memory, resets on restart
+
+// ---------- Google sign-in ----------
+const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID ?? ''
+/** First Google sign-in: identity verified, waiting for the player to pick a pseudo. */
+const googleTickets = new Map<string, { sub: string; email: string; exp: number }>()
+async function verifyGoogle(credential: unknown) {
+  if (!GOOGLE_CLIENT_ID) throw new Error('Connexion Google pas encore configurée')
+  if (typeof credential !== 'string' || credential.length > 4096) throw new Error('Jeton Google invalide')
+  // shortcut: Google's tokeninfo endpoint checks the signature for us; verify JWTs locally if traffic grows
+  const r = await fetch(`https://oauth2.googleapis.com/tokeninfo?id_token=${encodeURIComponent(credential)}`)
+  const t = (await r.json().catch(() => ({}))) as Row
+  const valid = r.ok && t.aud === GOOGLE_CLIENT_ID && ['accounts.google.com', 'https://accounts.google.com'].includes(t.iss)
+    && t.email_verified === 'true' && Number(t.exp) * 1000 > Date.now()
+  if (!valid) throw new Error('Jeton Google invalide')
+  return { sub: String(t.sub), email: String(t.email) }
+}
+async function nameTaken(name: string) {
+  return !!(await get('SELECT 1 FROM users WHERE name = ?', name))
+}
 const queues = new Map<number, number[]>()
 const privates = new Map<string, { host: number; minutes: number }>()
 const colorOf = (r: Room, id: number): Color => (r.players.w === id ? 'w' : 'b')
@@ -276,9 +295,11 @@ io.on('connection', (socket) => {
 
   on('register', async (d) => {
     const name = str(d.name), email = str(d.email), password = typeof d.password === 'string' ? d.password : ''
-    if (!/^[\w-]{3,16}$/.test(name)) throw new Error('Pseudo : 3 à 16 lettres, chiffres, _ ou -')
+    const bad = nameError(name)
+    if (bad) throw new Error(bad)
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new Error('E-mail invalide')
     if (password.length < 8) throw new Error('Mot de passe : 8 caractères minimum')
+    if (await nameTaken(name)) throw new Error('Ce pseudo est déjà pris')
     let id: number
     try {
       id = await run('INSERT INTO users (name, email, hash, created_at) VALUES (?, ?, ?, ?)', name, email, hashPw(password), Date.now())
@@ -302,6 +323,39 @@ io.on('connection', (socket) => {
     return { token: await newSession(u.id), profile: await profile(u.id) }
   }, false)
 
+  on('google', async (d) => {
+    const g = await verifyGoogle(d.credential)
+    const u = await get('SELECT id FROM users WHERE google_sub = ?', g.sub)
+    if (u) {
+      login(u.id)
+      return { token: await newSession(u.id), profile: await profile(u.id) }
+    }
+    // Never attach Google to an existing password account: its e-mail was never verified.
+    if (await get('SELECT 1 FROM users WHERE email = ?', g.email))
+      throw new Error('Un compte existe déjà avec cet e-mail : connecte-toi avec ton pseudo et ton mot de passe.')
+    const ticket = randomBytes(24).toString('hex')
+    googleTickets.set(ticket, { ...g, exp: Date.now() + 10 * 60_000 })
+    return { needName: true, ticket, suggestion: g.email.split('@')[0].replace(/[^\w-]/g, '').slice(0, 16) }
+  }, false)
+
+  on('google:register', async (d) => {
+    const t = googleTickets.get(str(d.ticket))
+    if (!t || t.exp < Date.now()) throw new Error('Connexion Google expirée, recommence')
+    const name = str(d.name), bad = nameError(name)
+    if (bad) throw new Error(bad)
+    if (await nameTaken(name)) throw new Error('Ce pseudo est déjà pris')
+    let id: number
+    try {
+      // '!' can never match a password: this account signs in with Google only.
+      id = await run("INSERT INTO users (name, email, hash, google_sub, created_at) VALUES (?, ?, '!', ?, ?)", name, t.email, t.sub, Date.now())
+    } catch {
+      throw new Error('Ce pseudo est déjà pris')
+    }
+    googleTickets.delete(str(d.ticket))
+    login(id)
+    return { token: await newSession(id), profile: await profile(id) }
+  }, false)
+
   on('logout', async (d, id) => {
     await run('DELETE FROM sessions WHERE token = ?', str(d.token))
     leaveQueues(id)
@@ -310,7 +364,7 @@ io.on('connection', (socket) => {
     pushOnline()
   })
 
-  on('me', async (_, id) => ({ profile: id ? await profile(id) : null, online: online() }), false)
+  on('me', async (_, id) => ({ profile: id ? await profile(id) : null, online: online(), googleClientId: GOOGLE_CLIENT_ID }), false)
 
   on('password', async (d, id) => {
     const u = (await get('SELECT hash FROM users WHERE id = ?', id))!

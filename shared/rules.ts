@@ -100,6 +100,17 @@ export function placementLayout(c: Color, p: Placement): string {
 export const layoutError = (layout: unknown) =>
   typeof layout === 'string' && layout.length === 16 ? setupError('w', layoutPlacement('w', layout)) : 'Arrangement invalide'
 
+// Names that could pass for staff or the game itself: blocked, also when hidden in leetspeak (4dm1n…).
+const RESERVED_PARTS = ['admin', 'moderat', 'bluffbot', 'bluffgambit', 'staff', 'support', 'officiel', 'official']
+const RESERVED_EXACT = ['root', 'system', 'systeme', 'bot', 'owner', 'modo', 'mod', 'moderation', 'claude', 'anthropic']
+/** Validates a pseudo; uniqueness is checked by the database (case-insensitive). */
+export function nameError(name: unknown): string | null {
+  if (typeof name !== 'string' || !/^[\w-]{3,16}$/.test(name)) return 'Pseudo : 3 à 16 lettres, chiffres, _ ou -'
+  const plain = name.toLowerCase().replace(/[013457]/g, (d) => 'oieast'['013457'.indexOf(d)]).replace(/[^a-z]/g, '')
+  if (RESERVED_PARTS.some((r) => plain.includes(r)) || RESERVED_EXACT.includes(plain)) return 'Ce pseudo est réservé, choisis-en un autre'
+  return null
+}
+
 export const levelOf = (xp: number) => Math.floor(Math.sqrt(xp / 100)) + 1
 export const TIME_CONTROLS = [3, 5, 10, 20]
 export const CHALLENGE_SECONDS = 10

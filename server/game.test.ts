@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { canMove, classicSetup, layoutError, layoutPlacement, placementLayout, randomSetup, setupError, DEFAULT_LAYOUT } from '../shared/rules.ts'
+import { nameError, canMove, classicSetup, layoutError, layoutPlacement, placementLayout, randomSetup, setupError, DEFAULT_LAYOUT } from '../shared/rules.ts'
 import type { Kind, Color } from '../shared/rules.ts'
 import * as G from './game.ts'
 
@@ -154,4 +154,10 @@ test('saved layouts round-trip and stay valid for both colours', () => {
   assert.equal(placementLayout('w', classicSetup('w')), DEFAULT_LAYOUT)
   assert.ok(layoutError('RNBQKBNRPPPPPPP'))
   assert.ok(layoutError('RNBQKNBRPPPPPPPP')) // both bishops on the same colour
+})
+
+test('pseudos: format and reserved names', () => {
+  for (const ok of ['Egon', 'wolf_xs', 'Robot-42', 'Botanique']) assert.equal(nameError(ok), null, ok)
+  for (const bad of ['Admin', 'xX_admin_Xx', '4dm1n', 'SuperModerateur', 'root', 'Bluffbot', 'Support2', 'ab', 'nom avec espace', 'a'.repeat(17)])
+    assert.ok(nameError(bad), bad)
 })

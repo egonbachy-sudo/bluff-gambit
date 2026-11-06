@@ -53,3 +53,5 @@ CREATE INDEX IF NOT EXISTS game_players_user ON game_players(user_id, ended_at);
 `)
 // Columns added after launch: ALTER fails harmlessly when the column already exists.
 await client.execute('ALTER TABLE users ADD COLUMN layout TEXT').catch(() => {})
+await client.execute('ALTER TABLE users ADD COLUMN google_sub TEXT').catch(() => {})
+await client.execute('CREATE UNIQUE INDEX IF NOT EXISTS users_google ON users(google_sub)')

@@ -78,8 +78,8 @@ Roque, prise en passant, échec, pat, règle des 50 coups.
   - le client ne reçoit jamais le type des pièces adverses ;
   - les identifiants de pièce sont aléatoires et les listes sont triées par identifiant ;
   - tout est validé côté serveur.
-- Comptes : pseudo + e-mail + mot de passe (scrypt), jeton de session.
+- Comptes : pseudo unique (sans tenir compte des majuscules, pseudos réservés bloqués : admin, modérateur…) + e-mail + mot de passe (scrypt), ou connexion Google ; jeton de session.
 - Une seule commande en dev (`npm run dev`, port 3000, Vite en middleware).
 
 ## Plus tard
-Niveaux de difficulté du bot, replay coup par coup, quêtes quotidiennes, saisons, PWA installable, connexion Google, spectateurs, hébergement (Railway / Fly.io).
+Niveaux de difficulté du bot, replay coup par coup, quêtes quotidiennes, saisons, PWA installable, spectateurs, hébergement (Railway / Fly.io).

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
 import { call, getToken, saveToken, socket } from './net.ts'
 import { Game } from './Game.tsx'
@@ -33,6 +33,7 @@ export function App() {
   const [me, setMe] = useState<Profile | null>(null)
   const [online, setOnline] = useState<Online>({ players: 0, visitors: 0 })
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [googleClientId, setGoogleClientId] = useState('')
   const [view, setView] = useState<GameView | null>(null)
   const [emote, setEmote] = useState('')
   const [settings, setSettings] = useState(loadSettings)
@@ -47,9 +48,10 @@ export function App() {
   }, [settings])
 
   const refresh = useCallback(() => {
-    call<{ profile: Profile | null; online: Online }>('me').then((r) => {
+    call<{ profile: Profile | null; online: Online; googleClientId: string }>('me').then((r) => {
       setMe(r.profile)
       setOnline(r.online)
+      setGoogleClientId(r.googleClientId)
     }).catch(() => {})
   }, [])
 
@@ -98,7 +100,7 @@ export function App() {
   else if (page === '/jouer') body = <Play me={me} view={view} />
   else if (page === '/classements') body = <Leaderboards me={me} />
   else if (page === '/perso') body = <Customize me={me} setMe={setMe} />
-  else if (page === '/compte') body = <Account me={me} setMe={setMe} />
+  else if (page === '/compte') body = <Account me={me} setMe={setMe} googleClientId={googleClientId} />
   else if (page === '/regles') body = <Rules />
   else if (page === '/tutoriel') body = <Tutorial skins={skins} loggedIn={!!me} />
   else body = <Home me={me} online={online} view={view} skins={skins} />
@@ -522,22 +524,68 @@ function Customize({ me, setMe }: { me: Profile | null; setMe: (p: Profile) => v
   )
 }
 
-function AuthForm({ setMe }: { setMe: (p: Profile) => void }) {
+declare global {
+  interface Window { google?: any }
+}
+let gisLoading: Promise<void> | undefined
+const loadGis = () => (gisLoading ??= new Promise<void>((ok, ko) => {
+  const s = document.createElement('script')
+  s.src = 'https://accounts.google.com/gsi/client'
+  s.async = true
+  s.onload = () => ok()
+  s.onerror = () => ko(new Error('Google indisponible'))
+  document.head.appendChild(s)
+}))
+
+/** Official "Continuer avec Google" button; hands back Google's signed ID token. */
+function GoogleButton({ clientId, onCredential }: { clientId: string; onCredential: (credential: string) => void }) {
+  const ref = useRef<HTMLDivElement>(null)
+  const cb = useRef(onCredential)
+  cb.current = onCredential
+  useEffect(() => {
+    if (!clientId) return
+    loadGis().then(() => {
+      window.google.accounts.id.initialize({ client_id: clientId, callback: (r: { credential: string }) => cb.current(r.credential) })
+      if (ref.current) window.google.accounts.id.renderButton(ref.current, { theme: 'filled_black', size: 'large', shape: 'pill', text: 'continue_with', locale: 'fr', width: 300 })
+    }).catch(() => {})
+  }, [clientId])
+  return clientId ? <div className="google-btn" ref={ref} /> : null
+}
+
+function AuthForm({ setMe, googleClientId }: { setMe: (p: Profile) => void; googleClientId: string }) {
+  const [google, setGoogle] = useState<{ ticket: string; name: string } | null>(null)
   const [mode, setMode] = useState<'login' | 'register'>('login')
   const [f, setF] = useState({ login: '', name: '', email: '', password: '' })
   const [remember, setRemember] = useState(false)
   const [err, setErr] = useState('')
   const [busy, setBusy] = useState(false)
   const field = (k: keyof typeof f) => ({ name: k, value: f[k], onChange: (e: { target: { value: string } }) => setF({ ...f, [k]: e.target.value }) })
+  const signedIn = (r: { token: string; profile: Profile }) => {
+    saveToken(r.token, remember)
+    setMe(r.profile)
+    go('/')
+  }
   const submit = (e: FormEvent) => {
     e.preventDefault()
     setBusy(true)
-    call<{ token: string; profile: Profile }>(mode, f).then((r) => {
-      saveToken(r.token, remember)
-      setMe(r.profile)
-      go('/')
-    }).catch((e: Error) => setErr(e.message)).finally(() => setBusy(false))
+    const req = google ? call('google:register', { ticket: google.ticket, name: google.name }) : call(mode, f)
+    req.then(signedIn).catch((e: Error) => setErr(e.message)).finally(() => setBusy(false))
   }
+  const withGoogle = (credential: string) =>
+    call<{ token: string; profile: Profile } | { needName: true; ticket: string; suggestion: string }>('google', { credential })
+      .then((r) => ('needName' in r ? setGoogle({ ticket: r.ticket, name: r.suggestion }) : signedIn(r)))
+      .catch((e: Error) => setErr(e.message))
+  if (google)
+    return (
+      <form className="card auth" onSubmit={submit}>
+        <h3>Dernière étape : choisis ton pseudo</h3>
+        <p className="muted">Ton compte Google est vérifié. Ce pseudo sera visible par les autres joueurs.</p>
+        <label>Pseudo<input name="name" value={google.name} onChange={(e) => setGoogle({ ...google, name: e.target.value })} autoComplete="username" spellCheck={false} required /></label>
+        <button className="primary" type="submit" disabled={busy}>{busy ? 'Un instant…' : 'Créer mon compte'}</button>
+        <button type="button" className="ghost-btn" onClick={() => setGoogle(null)}>Annuler</button>
+        {err && <p className="warn" role="alert">{err}</p>}
+      </form>
+    )
   return (
     <form className="card auth" onSubmit={submit}>
       <div className="row tabs segmented">
@@ -555,6 +603,8 @@ function AuthForm({ setMe }: { setMe: (p: Profile) => void }) {
       <label>Mot de passe<input {...field('password')} type="password" autoComplete={mode === 'login' ? 'current-password' : 'new-password'} required /></label>
       <label className="check"><input type="checkbox" checked={remember} onChange={(e) => setRemember(e.target.checked)} /> Rester connecté</label>
       <button className="primary" type="submit" disabled={busy}>{busy ? 'Un instant…' : mode === 'login' ? 'Se connecter' : 'Créer mon compte'}</button>
+      {googleClientId && <div className="or" aria-hidden="true">ou</div>}
+      <GoogleButton clientId={googleClientId} onCredential={withGoogle} />
       {err && <p className="warn" role="alert">{err}</p>}
     </form>
   )
@@ -565,7 +615,7 @@ type History = {
   rivals: { name: string; games: number; wins: number }[]
 }
 const dateFmt = new Intl.DateTimeFormat('fr-BE', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })
-function Account({ me, setMe }: { me: Profile | null; setMe: (p: Profile | null) => void }) {
+function Account({ me, setMe, googleClientId }: { me: Profile | null; setMe: (p: Profile | null) => void; googleClientId: string }) {
   const [h, setH] = useState<History | null>(null)
   const [pw, setPw] = useState({ old: '', new: '' })
   const [msg, setMsg] = useState('')
@@ -577,7 +627,7 @@ function Account({ me, setMe }: { me: Profile | null; setMe: (p: Profile | null)
       <main className="page narrow">
         <h1>Bienvenue</h1>
         <p className="muted">Connecte-toi ou crée un compte pour jouer en ligne, monter au classement et débloquer des skins.</p>
-        <AuthForm setMe={setMe} />
+        <AuthForm setMe={setMe} googleClientId={googleClientId} />
       </main>
     )
   const st = me.stats, xpNext = 100 * me.level ** 2, xpPrev = 100 * (me.level - 1) ** 2

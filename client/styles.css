@@ -441,3 +441,7 @@ progress::-moz-progress-bar { background: linear-gradient(90deg, var(--accent), 
 .tuto-list li:nth-child(2) { animation-delay: 0.05s; } .tuto-list li:nth-child(3) { animation-delay: 0.1s; }
 .tuto-list li:nth-child(4) { animation-delay: 0.15s; } .tuto-list li:nth-child(5) { animation-delay: 0.2s; } .tuto-list li:nth-child(6) { animation-delay: 0.25s; }
 @keyframes pop-in { from { opacity: 0; scale: 0.85; } }
+
+.google-btn { display: flex; justify-content: center; min-height: 44px; }
+.or { display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: 0.85rem; }
+.or::before, .or::after { content: ''; flex: 1; height: 1px; background: var(--border); }

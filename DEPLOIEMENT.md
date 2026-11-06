@@ -24,6 +24,18 @@ Limite du gratuit : le serveur s'endort après 15 min sans visiteur, le premier 
 3. Remplis `TURSO_DATABASE_URL` et `TURSO_AUTH_TOKEN` avec les valeurs de l'étape 1, puis **Apply**.
 4. Après la construction (~3 min), le jeu est sur `https://bluff-gambit.onrender.com` (ou le nom que Render affiche).
 
+## 4. Connexion Google (facultatif)
+1. Sur https://console.cloud.google.com, crée un projet `bluff-gambit`.
+2. **API et services → Écran de consentement OAuth** : type « Externe », nom « Bluff Gambit », ton e-mail. Publie-le (« En production »).
+3. **API et services → Identifiants → Créer des identifiants → ID client OAuth**, type « Application Web ».
+   - **Origines JavaScript autorisées** : `https://bluff-gambit-bgy7.onrender.com` et `http://localhost:3000`.
+   - Pas besoin d'URI de redirection.
+4. Copie l'**ID client** (il finit par `.apps.googleusercontent.com`). Ce n'est pas un secret.
+5. Dans Render → ton service → **Environment**, ajoute `GOOGLE_CLIENT_ID` = cet ID, puis enregistre (Render redémarre).
+6. Le bouton « Continuer avec Google » apparaît sur la page de connexion. En local : lance le serveur avec `GOOGLE_CLIENT_ID=… npm run dev`.
+
+Un compte créé avec un e-mail + mot de passe ne se relie pas automatiquement à Google (son e-mail n'a jamais été vérifié) : ces joueurs continuent avec leur mot de passe.
+
 ## Mettre à jour le site
 `git push` : Render reconstruit et redéploie tout seul. Les parties en cours sont coupées pendant le redéploiement, les comptes et classements restent (ils sont chez Turso).
 
