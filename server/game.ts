@@ -7,6 +7,8 @@ export type Piece = { id: string; owner: Color; kind: Kind; x: number; y: number
 type Player = {
   lives: number; captured: Kind[]; marks: Record<string, Kind>; lastMark: number; turns: number; ready: boolean
   correctChallenges: number; wrongChallenges: number; bluffs: number; uncaughtBluffs: number
+  /** Worst life gap behind the opponent (remontada bonus); missing in games saved before it existed. */
+  deficit?: number
 }
 type Last = { mover: Color; pieceId: string; from: Sq; to: Sq; as: Kind; real: Kind; bluff: boolean; captured: Piece | null; promo?: Kind }
 export type StartPiece = { id: string; owner: Color; kind: Kind; x: number; y: number }
@@ -51,12 +53,19 @@ function end(g: Game, winner: Color, reason: string) {
   g.log.push(`Fin de partie : ${NAME[winner]} gagne (${reason}).`)
 }
 
+/** Costs `c` one life and remembers how far behind it fell. */
+function hurt(g: Game, c: Color) {
+  const pl = g.players[c]
+  pl.lives--
+  pl.deficit = Math.max(pl.deficit ?? 0, g.players[opp(c)].lives - pl.lives)
+}
+
 /** Removes a caught bluffing piece and costs its owner a life. */
 function punish(g: Game, p: Piece) {
   const pl = g.players[p.owner]
   p.alive = false
   pl.captured.push(p.kind)
-  pl.lives--
+  hurt(g, p.owner)
   if (p.kind === 'K') end(g, opp(p.owner), 'roi démasqué en bluff')
   else if (pl.lives <= 0) end(g, opp(p.owner), 'plus de vies')
 }
@@ -162,7 +171,7 @@ export function challenge(g: Game, c: Color, contest: boolean): string | null {
     punish(g, p)
   } else {
     g.players[c].wrongChallenges++
-    g.players[c].lives--
+    hurt(g, c)
     g.log.push(`${NAME[c]} conteste à tort : le coup était légal. ${NAME[c]} perd 1 vie.`)
     if (g.players[c].lives <= 0) end(g, mover, 'plus de vies')
   }
@@ -198,21 +207,26 @@ export function stats(g: Game, c: Color) {
   const pl = g.players[c]
   const pieces = alive(g).filter((p) => p.owner === c).reduce((s, p) => s + VALUE[p.kind], 0)
   const correctMarks = Object.entries(pl.marks).filter(([id, k]) => g.pieces.find((p) => p.id === id)?.kind === k).length
+  const won = g.winner === c
+  // A real win (not a resignation or a forfeit) pays a speed bonus; the side that gives up scores nothing.
+  const quit = g.reason.startsWith('abandon')
   const detail = {
-    victoire: g.winner === c ? 100 : 0,
-    pieces: pieces * 3,
+    victoire: won ? 100 : 0,
+    rapidité: won && !quit ? Math.max(0, 30 - pl.turns) : 0,
+    remontada: won && (pl.deficit ?? 0) >= 3 ? 30 : 0,
+    pieces,
     vies: pl.lives * 5,
-    contestations: pl.correctChallenges * 15,
+    contestations: pl.correctChallenges * 15 - pl.wrongChallenges * 5,
     marquages: correctMarks * 5,
-    bluffs: pl.uncaughtBluffs * 4,
+    bluffs: pl.uncaughtBluffs * 6,
   }
-  const total = Object.values(detail).reduce((a, b) => a + b, 0)
+  const total = !won && quit ? 0 : Math.max(0, Object.values(detail).reduce((a, b) => a + b, 0))
   return { detail, total, correctMarks, lives: pl.lives, correctChallenges: pl.correctChallenges, wrongChallenges: pl.wrongChallenges, uncaughtBluffs: pl.uncaughtBluffs }
 }
 
 /** Elo change for the side scoring `result` (1 win, 0 loss). */
-export const eloDelta = (mine: number, theirs: number, result: number) =>
-  Math.round(32 * (result - 1 / (1 + 10 ** ((theirs - mine) / 400))))
+export const eloDelta = (mine: number, theirs: number, result: number, k = 32) =>
+  Math.round(k * (result - 1 / (1 + 10 ** ((theirs - mine) / 400))))
 
 /** What side `c` is allowed to see. Enemy kinds never leave the server before the end. */
 export function view(g: Game, c: Color) {

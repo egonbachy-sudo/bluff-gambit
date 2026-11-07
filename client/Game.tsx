@@ -2,9 +2,9 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { beep, call } from './net.ts'
 import { translate } from './i18n.ts'
-import { Avatar, Board, KindPicker, PieceIcon } from './Board.tsx'
+import { Avatar, Board, KindPicker, PieceIcon, RankBadge } from './Board.tsx'
 import type { BoardPiece, Skins } from './Board.tsx'
-import { classicSetup, destinations, homeRows, lastRank, layoutPlacement, opp, randomSetup, setupError, sqName, EMOTES, NAMES } from '../shared/rules.ts'
+import { goldOf, classicSetup, destinations, homeRows, lastRank, layoutPlacement, opp, randomSetup, setupError, sqName, EMOTES, NAMES } from '../shared/rules.ts'
 import type { Color, Kind, Placement, Sq } from '../shared/rules.ts'
 import type { View } from '../server/game.ts'
 
@@ -131,7 +131,7 @@ export function Game({ v, skins, layout, sound, hints, emote, onLeave, savedId }
       <div className={`bar ${active ? 'active' : ''}`}>
         <div className="who">
           <Avatar id={v.avatars?.[c]} name={v.names[c]} size={30} />
-          <b>{v.names[c]}</b> <small>{v.elo[c]}</small>
+          <b>{v.names[c]}</b> <RankBadge elo={v.elo[c]} /> <small>{v.elo[c]}</small>
           {c === foe && emote && <span className="bubble" role="status">{emote}</span>}
         </div>
         {!!v.away?.[c] && <div className="away" role="status">{c === me ? 'Reconnexion…' : `Déconnecté · victoire dans ${fmt(v.away[c] - (now - v.at))}`}</div>}
@@ -284,8 +284,9 @@ export function Game({ v, skins, layout, sound, hints, emote, onLeave, savedId }
             <p className="muted">{v.reason}</p>
             <table>
               <tbody>
-                {Object.entries(s.detail).map(([k, n]) => <tr key={k}><td>{k}</td><td>+{n}</td></tr>)}
+                {Object.entries(s.detail).filter(([, n]) => n).map(([k, n]) => <tr key={k}><td>{k}</td><td>{n > 0 ? '+' : ''}{n}</td></tr>)}
                 <tr className="total"><td>Score</td><td>{s.total}</td></tr>
+                {savedId && <tr><td>Or</td><td>+{goldOf(s.total)} 🪙</td></tr>}
                 {v.ranked && v.eloDelta && <tr><td>Elo</td><td>{v.eloDelta[me] >= 0 ? '+' : ''}{v.eloDelta[me]}</td></tr>}
               </tbody>
             </table>

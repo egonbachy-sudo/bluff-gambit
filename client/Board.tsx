@@ -1,7 +1,7 @@
 // Shared animated board: squares handle clicks, pieces live in a layer above and glide between squares.
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { CSSProperties, ReactNode } from 'react'
-import { avatarOf, KINDS, LETTER, NAMES } from '../shared/rules.ts'
+import { avatarOf, rankOf, KINDS, LETTER, NAMES } from '../shared/rules.ts'
 import type { Color, Kind, Sq } from '../shared/rules.ts'
 
 export type Skins = { pieces: string; board: string }
@@ -23,6 +23,12 @@ export function Avatar({ id, name, size = 34 }: { id?: string | null; name: stri
       <span className="avatar-in">{a ? a.emoji : name.trim()[0]?.toUpperCase() ?? '?'}</span>
     </span>
   )
+}
+
+/** Rank chip computed from Elo (Bronze … Maître). */
+export function RankBadge({ elo }: { elo: number }) {
+  const r = rankOf(elo)
+  return <span className={`rank-badge rank-${r.key}`}>{r.label}</span>
 }
 
 export const reducedMotion = () => typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches

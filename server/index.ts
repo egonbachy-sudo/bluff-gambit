@@ -8,7 +8,7 @@ import { all, get, run } from './db.ts'
 import type { Row } from './db.ts'
 import * as G from './game.ts'
 import * as Bot from './bot.ts'
-import { avatarOf, dailyQuests, dayKey, seasonOf, nameError, layoutError, layoutPlacement, opp, randomSetup, levelOf, DEFAULT_LAYOUT, CHALLENGE_SECONDS, DEFAULT_UNLOCKS, EMOTES, QUESTS, TIME_CONTROLS } from '../shared/rules.ts'
+import { avatarOf, goldOf, kFactor, rankOf, seasonPoints, RANKS, SEASON_RANK_REWARDS, SHOP, dailyQuests, dayKey, seasonOf, nameError, layoutError, layoutPlacement, opp, randomSetup, levelOf, DEFAULT_LAYOUT, CHALLENGE_SECONDS, DEFAULT_UNLOCKS, EMOTES, QUESTS, TIME_CONTROLS } from '../shared/rules.ts'
 import type { Color, Kind } from '../shared/rules.ts'
 
 const PORT = Number(process.env.PORT ?? 3000)
@@ -71,8 +71,9 @@ async function stats(id: number) {
     COALESCE(SUM(score), 0) + (SELECT COALESCE(SUM(xp), 0) FROM rewards WHERE user_id = ?) xp,
     COALESCE(SUM(correct_challenges), 0) correct_challenges, COALESCE(SUM(wrong_challenges), 0) wrong_challenges,
     COALESCE(SUM(correct_marks), 0) correct_marks, COALESCE(SUM(uncaught_bluffs), 0) uncaught_bluffs,
-    COALESCE(MAX(CASE WHEN won = 1 THEN lives END), 0) best_lives
-    FROM game_players WHERE user_id = ?`, id, id))!
+    COALESCE(MAX(CASE WHEN won = 1 THEN lives END), 0) best_lives,
+    (SELECT COUNT(*) FROM game_players p JOIN games g ON g.id = p.game_id WHERE p.user_id = ? AND g.ranked = 1) ranked
+    FROM game_players WHERE user_id = ?`, id, id, id))!
 }
 /** Today's quests with progress; finished ones are rewarded once (their XP joins the total). */
 async function daily(id: number) {
@@ -85,24 +86,35 @@ async function daily(id: number) {
   for (const q of quests) if (q.done) await run('INSERT OR IGNORE INTO rewards VALUES (?, ?, ?, ?)', id, day, q.id, q.xp)
   return { quests, resetAt: since + 86_400_000 }
 }
-const unlockedOf = (st: Row, champion = false) =>
-  [...DEFAULT_UNLOCKS, ...QUESTS.filter((q) => st[q.stat] >= q.goal).map((q) => q.reward), ...(champion ? ['avatar:champion'] : [])]
+const seasonLabel = (key: string) => seasonOf(Date.parse(`${key}-15`)).label
 async function awardsOf(id: number) {
   const rows = await all('SELECT season, rank FROM season_awards WHERE user_id = ? AND rank > 0 ORDER BY season DESC', id)
-  return rows.map((r) => ({ season: r.season as string, rank: r.rank as number, label: seasonOf(Date.parse(`${r.season}-15`)).label }))
+  return rows.map((r) => ({ season: r.season as string, rank: r.rank as number, label: seasonLabel(r.season) }))
 }
-async function unlockedFor(id: number) {
-  return unlockedOf(await stats(id), (await awardsOf(id)).length > 0)
+/** Best rank reached in each finished season. */
+async function seasonRanksOf(id: number) {
+  const rows = await all('SELECT season, rank FROM season_ranks WHERE user_id = ? ORDER BY season DESC', id)
+  return rows.map((r) => ({ season: r.season as string, rank: r.rank as string, label: seasonLabel(r.season) }))
+}
+const atLeast = (rank: string, min: string) => RANKS.findIndex((r) => r.key === rank) >= RANKS.findIndex((r) => r.key === min)
+/** Everything unlocked: quests, a top-3 season finish, ranks reached in past seasons, and gold purchases. */
+async function unlockedFor(id: number, st?: Row) {
+  const [s, awards, ranks, bought] = await Promise.all([st ?? stats(id), awardsOf(id), seasonRanksOf(id), all('SELECT item FROM purchases WHERE user_id = ?', id)])
+  return [...new Set([
+    ...DEFAULT_UNLOCKS, ...QUESTS.filter((q) => s[q.stat] >= q.goal).map((q) => q.reward), ...(awards.length ? ['avatar:champion'] : []),
+    ...SEASON_RANK_REWARDS.filter((r) => ranks.some((x) => atLeast(x.rank, r.rank))).map((r) => r.reward), ...bought.map((b) => b.item as string),
+  ])]
 }
 async function profile(id: number) {
-  const u = (await get('SELECT id, name, email, elo, piece_skin, board_skin, layout, avatar, google_sub, hash FROM users WHERE id = ?', id))!
+  const u = (await get('SELECT id, name, email, elo, gold, piece_skin, board_skin, layout, avatar, google_sub, hash FROM users WHERE id = ?', id))!
   const dq = await daily(id) // first: it may grant XP that stats() then counts
   const st = await stats(id)
   const { google_sub, hash, ...pub } = u
-  const awards = await awardsOf(id)
+  const [awards, seasonRanks, unlocked, sp] = await Promise.all([awardsOf(id), seasonRanksOf(id), unlockedFor(id, st),
+    get('SELECT COALESCE(SUM(season_pts), 0) n FROM game_players WHERE user_id = ? AND ended_at >= ?', id, seasonOf().start)])
   return {
-    ...pub, layout: u.layout ?? DEFAULT_LAYOUT, google: !!google_sub, hasPassword: hash !== '!',
-    stats: st, level: levelOf(st.xp), unlocked: unlockedOf(st, awards.length > 0), inGame: roomOf.has(id), daily: dq, season: seasonOf(), awards,
+    ...pub, layout: u.layout ?? DEFAULT_LAYOUT, google: !!google_sub, hasPassword: hash !== '!', seasonPoints: sp!.n as number,
+    stats: st, level: levelOf(st.xp), unlocked, inGame: roomOf.has(id), daily: dq, season: seasonOf(), awards, seasonRanks,
   }
 }
 // The training bot is a regular user row whose hash can never match a password.
@@ -117,6 +129,8 @@ type Room = {
   ranked: boolean; minutes: number; g: G.Game; clock: Record<Color, number>; since: number
   layouts: Record<Color, string>
   avatars: Record<Color, string | null>
+  /** Ranked games played before this one (placement K); missing in rooms saved before it existed. */
+  placed?: Record<Color, number>
   timer?: NodeJS.Timeout; windowEnd?: number; setupEnd: number; eloDelta?: Record<Color, number>; done?: boolean
   bot?: Color; mem?: Bot.Mem; botTimer?: NodeJS.Timeout
   id: string; private: boolean
@@ -161,10 +175,11 @@ async function startRoom(a: number, b: number, minutes: number, ranked: boolean,
   leaveQueues(b)
   starting.add(a).add(b)
   const [w, bl] = Math.random() < 0.5 ? [a, b] : [b, a]
-  const user = (id: number) => get('SELECT name, elo, layout, avatar FROM users WHERE id = ?', id) as Promise<Row>
+  const user = (id: number) => get(`SELECT name, elo, layout, avatar, (SELECT COUNT(*) FROM game_players p JOIN games g ON g.id = p.game_id
+    WHERE p.user_id = users.id AND g.ranked = 1) placed FROM users WHERE id = ?`, id) as Promise<Row>
   const [uw, ub] = await Promise.all([user(w), user(bl)]).finally(() => { starting.delete(a); starting.delete(b) })
   const room: Room = {
-    players: { w, b: bl }, names: { w: uw.name, b: ub.name }, elo: { w: uw.elo, b: ub.elo },
+    players: { w, b: bl }, names: { w: uw.name, b: ub.name }, elo: { w: uw.elo, b: ub.elo }, placed: { w: uw.placed, b: ub.placed },
     layouts: { w: uw.layout ?? DEFAULT_LAYOUT, b: ub.layout ?? DEFAULT_LAYOUT },
     avatars: { w: w === BOT_ID ? 'b:15' : uw.avatar, b: bl === BOT_ID ? 'b:15' : ub.avatar },
     ranked, minutes, g: G.newGame(), clock: { w: minutes * 60_000, b: minutes * 60_000 },
@@ -368,18 +383,33 @@ function finish(r: Room) {
     return
   }
   const g = r.g, now = Date.now()
-  const d = r.ranked && g.winner ? G.eloDelta(r.elo.w, r.elo.b, g.winner === 'w' ? 1 : 0) : 0
-  const delta = (r.eloDelta = { w: d, b: -d })
+  // Each side has its own K (placement games move faster), so the two changes need not cancel out.
+  const elo = (c: Color) => r.ranked && g.winner ? G.eloDelta(r.elo[c], r.elo[opp(c)], g.winner === c ? 1 : 0, kFactor(r.placed?.[c] ?? 99)) : 0
+  const delta = (r.eloDelta = { w: elo('w'), b: elo('b') })
   for (const c of ['w', 'b'] as Color[]) roomOf.delete(r.players[c])
   ;(async () => {
     const gameId = await run('INSERT INTO games (white, black, winner, reason, ranked, minutes, history, start, ended_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
       r.players.w, r.players.b, g.winner, g.reason, r.ranked ? 1 : 0, r.minutes, JSON.stringify(g.history), JSON.stringify(g.start), now)
+    const season = seasonOf(now).start, today = Date.parse(dayKey(now))
     for (const c of ['w', 'b'] as Color[]) {
-      const s = G.stats(g, c), uid = r.players[c]
-      await run('INSERT INTO game_players VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-        gameId, uid, c, g.winner === c ? 1 : 0, s.total, s.lives, s.correctChallenges, s.wrongChallenges,
-        s.correctMarks, s.uncaughtBluffs, r.elo[c], r.elo[c] + delta[c], now)
-      await run('UPDATE users SET elo = elo + ? WHERE id = ?', delta[c], uid)
+      const s = G.stats(g, c), uid = r.players[c], foe = r.players[opp(c)], won = g.winner === c
+      let pts = 0
+      if (r.ranked && g.winner) {
+        const recent = await all(`SELECT p.won FROM game_players p JOIN games g ON g.id = p.game_id
+          WHERE p.user_id = ? AND g.ranked = 1 AND p.ended_at >= ? AND g.id <> ? ORDER BY p.ended_at DESC LIMIT 5`, uid, season, gameId)
+        const lost = recent.findIndex((x) => !x.won)
+        const total = (await get('SELECT COALESCE(SUM(season_pts), 0) n FROM game_players WHERE user_id = ? AND ended_at >= ?', uid, season))!.n
+        const vsFoe = (await get(`SELECT COUNT(*) n FROM games WHERE ranked = 1 AND ended_at >= ? AND id <> ?
+          AND ((white = ? AND black = ?) OR (white = ? AND black = ?))`, today, gameId, uid, foe, foe, uid))!.n
+        pts = seasonPoints(won, lost === -1 ? recent.length : lost, total, vsFoe)
+      }
+      await run(`INSERT INTO game_players (game_id, user_id, color, won, score, lives, correct_challenges, wrong_challenges,
+        correct_marks, uncaught_bluffs, elo_before, elo_after, ended_at, season_pts) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        gameId, uid, c, won ? 1 : 0, s.total, s.lives, s.correctChallenges, s.wrongChallenges,
+        s.correctMarks, s.uncaughtBluffs, r.elo[c], r.elo[c] + delta[c], now, pts)
+      await run('UPDATE users SET elo = elo + ?, gold = gold + ? WHERE id = ?', delta[c], goldOf(s.total), uid)
+      // First win of the day doubles its XP (the primary key keeps it to one per day).
+      if (won) await run("INSERT OR IGNORE INTO rewards VALUES (?, ?, 'firstwin', ?)", uid, dayKey(now), s.total)
     }
     for (const c of ['w', 'b'] as Color[]) io.to(`u${r.players[c]}`).emit('saved', gameId)
   })().catch((e) => console.error('save game', e))
@@ -390,7 +420,7 @@ const sumBoard = (col: string) => `SELECT u.name, u.avatar, SUM(g.${col}) value 
   WHERE g.ended_at > ? AND u.email NOT LIKE 'deleted-%' GROUP BY u.id HAVING value > 0 ORDER BY value DESC LIMIT 50`
 const BOARDS: Record<string, string> = {
   elo: `SELECT name, avatar, elo value FROM users WHERE ? >= 0 AND email NOT LIKE 'deleted-%' AND EXISTS (SELECT 1 FROM game_players g WHERE g.user_id = users.id) ORDER BY elo DESC LIMIT 50`,
-  week: sumBoard('score'), season: sumBoard('score'), wins: sumBoard('won'), bluff: sumBoard('uncaught_bluffs'), detect: sumBoard('correct_challenges'),
+  week: sumBoard('season_pts'), season: sumBoard('season_pts'), wins: sumBoard('won'), bluff: sumBoard('uncaught_bluffs'), detect: sumBoard('correct_challenges'),
 }
 
 // ---------- mail (password reset) ----------
@@ -418,7 +448,11 @@ const friendsChanged = (...ids: number[]) => { for (const id of ids) io.to(`u${i
 async function awardSeasons() {
   const prev = seasonOf(seasonOf().start - 1)
   if (await get('SELECT 1 FROM season_awards WHERE season = ?', prev.key)) return
-  const top = await all(`SELECT g.user_id, SUM(g.score) s FROM game_players g JOIN users u ON u.id = g.user_id
+  // Best rank reached during the season, from the Elo after each ranked game.
+  const peaks = await all(`SELECT p.user_id, MAX(p.elo_after) peak FROM game_players p JOIN games g ON g.id = p.game_id
+    WHERE g.ranked = 1 AND p.ended_at >= ? AND p.ended_at < ? AND p.user_id <> ? GROUP BY p.user_id`, prev.start, prev.end, BOT_ID)
+  for (const p of peaks) await run('INSERT OR IGNORE INTO season_ranks VALUES (?, ?, ?)', prev.key, p.user_id, rankOf(p.peak).key)
+  const top = await all(`SELECT g.user_id, SUM(g.season_pts) s FROM game_players g JOIN users u ON u.id = g.user_id
     WHERE g.ended_at >= ? AND g.ended_at < ? AND u.email NOT LIKE 'deleted-%' AND u.id <> ? GROUP BY g.user_id HAVING s > 0 ORDER BY s DESC LIMIT 3`,
     prev.start, prev.end, BOT_ID)
   // rank 0 = "season processed, nobody qualified", so it is not computed again
@@ -578,7 +612,7 @@ io.on('connection', (socket) => {
     if (r && r.g.phase !== 'over') try { act(r, () => G.resign(r.g, colorOf(r, id))) } catch {}
     leaveQueues(id)
     await run("UPDATE users SET name = ?, email = ?, hash = '!', google_sub = NULL, avatar = NULL, layout = NULL WHERE id = ?", `supprimé-${id}`, `deleted-${id}@invalid`, id)
-    for (const sql of ['DELETE FROM sessions WHERE user_id = ?', 'DELETE FROM rewards WHERE user_id = ?', 'DELETE FROM push_subs WHERE user_id = ?', 'DELETE FROM password_resets WHERE user_id = ?'])
+    for (const sql of ['DELETE FROM sessions WHERE user_id = ?', 'DELETE FROM rewards WHERE user_id = ?', 'DELETE FROM purchases WHERE user_id = ?', 'DELETE FROM push_subs WHERE user_id = ?', 'DELETE FROM password_resets WHERE user_id = ?'])
       await run(sql, id)
     await run('DELETE FROM friends WHERE user_id = ? OR friend_id = ?', id, id)
     socket.leave(`u${id}`)
@@ -709,8 +743,18 @@ io.on('connection', (socket) => {
 
   on('skin', async (d, id) => {
     const type = d.type === 'board' ? 'board' : 'pieces', skin = str(d.skin)
-    if (!unlockedOf(await stats(id)).includes(`${type}:${skin}`)) throw new Error('Skin pas encore débloqué')
+    if (!(await unlockedFor(id)).includes(`${type}:${skin}`)) throw new Error('Skin pas encore débloqué')
     await run(`UPDATE users SET ${type === 'board' ? 'board_skin' : 'piece_skin'} = ? WHERE id = ?`, skin, id)
+    return profile(id)
+  })
+
+  on('shop:buy', async (d, id) => {
+    const item = str(d.item), price = SHOP[item]
+    if (!price) throw new Error('Article inconnu')
+    if ((await unlockedFor(id)).includes(item)) throw new Error('Tu l’as déjà')
+    // The WHERE clause makes the debit atomic: gold never goes below zero, even with two clicks at once.
+    if (!(await get('UPDATE users SET gold = gold - ? WHERE id = ? AND gold >= ? RETURNING id', price, id, price))) throw new Error('Pas assez d’or')
+    await run('INSERT OR IGNORE INTO purchases VALUES (?, ?)', id, item)
     return profile(id)
   })
 

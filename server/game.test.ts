@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { nameError, canMove, classicSetup, layoutError, layoutPlacement, placementLayout, randomSetup, setupError, DEFAULT_LAYOUT } from '../shared/rules.ts'
+import { kFactor, rankOf, seasonPoints, nameError, canMove, classicSetup, layoutError, layoutPlacement, placementLayout, randomSetup, setupError, DEFAULT_LAYOUT } from '../shared/rules.ts'
 import type { Kind, Color } from '../shared/rules.ts'
 import * as G from './game.ts'
 
@@ -211,4 +211,29 @@ test('daily quests: 3 distinct per day, same for everyone, change across days', 
   const s = seasonOf(Date.UTC(2026, 10, 15))
   assert.equal(s.label, 'Saison de novembre 2026')
   assert.equal(s.end, Date.UTC(2026, 11, 1))
+})
+
+test('score: resigning scores 0, wrong challenges cost points, comebacks pay', () => {
+  const g = started()
+  G.move(g, 'w', { pieceId: id(g, 4, 1), to: { x: 4, y: 3 }, as: 'P' })
+  G.challenge(g, 'b', true)
+  assert.equal(G.stats(g, 'b').detail.contestations, -5)
+  g.players.w.lives = 6 // white falls 4 lives behind, then black resigns
+  g.players.w.deficit = 4
+  G.resign(g, 'b')
+  assert.equal(G.stats(g, 'b').total, 0)
+  const w = G.stats(g, 'w')
+  assert.equal(w.detail.remontada, 30)
+  assert.equal(w.detail.rapidité, 0) // no speed bonus for a resignation
+})
+
+test('ranks, placement K and season points', () => {
+  assert.equal(rankOf(1200).key, 'argent')
+  assert.equal(rankOf(1700).key, 'maitre')
+  assert.equal(kFactor(0), 48)
+  assert.equal(kFactor(5), 32)
+  assert.equal(seasonPoints(true, 0, 0, 0), 10)
+  assert.equal(seasonPoints(true, 9, 0, 0), 20)
+  assert.equal(seasonPoints(false, 0, 2, 0), -2)
+  assert.equal(seasonPoints(true, 0, 0, 3), 0)
 })

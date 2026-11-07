@@ -120,12 +120,12 @@ const STEPS: Step[] = [
   {
     type: 'read', title: 'Les points', text: 'À la fin de chaque partie, ton score se calcule ainsi :', pieces: BOTH,
     list: [
-      'Victoire : +100.',
-      'Pièces restantes : leur valeur × 3 (pion 1, cavalier et fou 3, tour 5, dame 9).',
-      'Vies restantes : +5 chacune.',
-      'Contestation juste : +15. Marquage juste : +5. Bluff jamais démasqué : +4.',
-      'Le score donne de l’XP (ton niveau) et fait avancer les quêtes, qui débloquent des skins.',
-      'L’Elo ne bouge qu’en partie classée. Les parties contre Bluffbot ne comptent pas.',
+      'Victoire : +100, plus un bonus de rapidité (jusqu’à +30) et +30 si tu gagnes après avoir eu 3 vies de retard.',
+      'Pièces restantes : leur valeur (pion 1, cavalier et fou 3, tour 5, dame 9). Vies restantes : +5 chacune.',
+      'Contestation juste : +15, ratée : −5. Marquage juste : +5. Bluff jamais démasqué : +6. Abandonner donne 0.',
+      'Le score donne de l’XP (doublée pour ta 1re victoire du jour) et de l’or pour acheter des skins.',
+      'En partie classée, l’Elo fixe ton rang (Bronze → Maître) et tu gagnes des points de saison.',
+      'Les parties contre Bluffbot ne comptent pas.',
     ],
   },
   {

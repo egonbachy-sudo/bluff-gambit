@@ -559,3 +559,10 @@ progress::-moz-progress-bar { background: linear-gradient(90deg, var(--accent), 
   .nav { grid-template-columns: repeat(6, 1fr); }
   .nav a { font-size: 0.66rem; }
 }
+
+/* rank chips (Bronze … Maître) and the gold shop */
+.rank-badge { display: inline-block; padding: 1px 7px; border-radius: 99px; font-size: 0.72rem; font-weight: 800; letter-spacing: 0.02em; vertical-align: middle; color: #1b1b1b; background: var(--rank, #b9b9b9); }
+.rank-bronze { --rank: #c98a55; } .rank-argent { --rank: #c7ccd3; } .rank-or { --rank: #f0c64a; }
+.rank-platine { --rank: #7fd6c9; } .rank-diamant { --rank: #8fb8ff; } .rank-maitre { --rank: #d39bff; }
+.shop { margin-top: 12px; }
+.shop .row { flex-wrap: wrap; }

@@ -65,4 +65,8 @@ CREATE TABLE IF NOT EXISTS season_awards (season TEXT NOT NULL, rank INTEGER NOT
 CREATE TABLE IF NOT EXISTS push_subs (endpoint TEXT PRIMARY KEY, user_id INTEGER NOT NULL, data TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 `)
+await client.execute('ALTER TABLE game_players ADD COLUMN season_pts INTEGER NOT NULL DEFAULT 0').catch(() => {})
+await client.execute('ALTER TABLE users ADD COLUMN gold INTEGER NOT NULL DEFAULT 0').catch(() => {})
+await client.execute('CREATE TABLE IF NOT EXISTS purchases (user_id INTEGER NOT NULL, item TEXT NOT NULL, PRIMARY KEY (user_id, item))')
+await client.execute('CREATE TABLE IF NOT EXISTS season_ranks (season TEXT NOT NULL, user_id INTEGER NOT NULL, rank TEXT NOT NULL, PRIMARY KEY (season, user_id))')
 await client.execute('CREATE TABLE IF NOT EXISTS rewards (user_id INTEGER NOT NULL, day TEXT NOT NULL, quest TEXT NOT NULL, xp INTEGER NOT NULL, PRIMARY KEY (user_id, day, quest))')

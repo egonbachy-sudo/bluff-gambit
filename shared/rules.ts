@@ -141,6 +141,31 @@ export const AVATARS_SPECIAL: Record<string, { emoji: string; label: string }> =
   masque: { emoji: '🎭', label: 'Masque' }, joker: { emoji: '🃏', label: 'Joker' }, oeil: { emoji: '👁️', label: 'Œil' },
   diamant: { emoji: '💎', label: 'Diamant' }, couronne: { emoji: '👑', label: 'Couronne' }, dragon: { emoji: '🐉', label: 'Dragon' },
   champion: { emoji: '🏆', label: 'Champion' },
+  medaille: { emoji: '🏅', label: 'Médaille' }, etoile: { emoji: '🌟', label: 'Étoile' },
+}
+
+// ---------- ranks, season points, shop ----------
+/** Visible rank from Elo; `min` is the Elo needed for it. */
+export const RANKS = [
+  { key: 'bronze', label: 'Bronze', min: 0 }, { key: 'argent', label: 'Argent', min: 1100 }, { key: 'or', label: 'Or', min: 1250 },
+  { key: 'platine', label: 'Platine', min: 1400 }, { key: 'diamant', label: 'Diamant', min: 1550 }, { key: 'maitre', label: 'Maître', min: 1700 },
+]
+export const rankOf = (elo: number) => RANKS.findLast((r) => elo >= r.min)!
+/** First ranked games move Elo faster so new players reach their level quickly. */
+export const PLACEMENT_GAMES = 5
+export const kFactor = (rankedGames: number) => (rankedGames < PLACEMENT_GAMES ? 48 : 32)
+/** Season points of one ranked game. `streak` = ranked wins in a row before it, `total` = season points so far. */
+export function seasonPoints(won: boolean, streak: number, total: number, sameFoeToday: number) {
+  if (sameFoeToday >= 3) return 0 // anti-farm: a 4th ranked game against the same player in a day counts for nothing
+  return won ? 10 + Math.min(10, 2 * streak) : -Math.min(4, total)
+}
+/** Avatars earned by the best rank reached during a season. */
+export const SEASON_RANK_REWARDS = [{ rank: 'or', reward: 'avatar:medaille' }, { rank: 'diamant', reward: 'avatar:etoile' }]
+export const goldOf = (score: number) => Math.floor(score / 10)
+/** Quest rewards can also be bought with gold. */
+export const SHOP: Record<string, number> = {
+  'pieces:contour': 150, 'board:marbre': 200, 'pieces:lettres': 250, 'board:ocean': 250, 'pieces:neon': 350, 'board:amethyste': 400, 'pieces:or': 500,
+  'avatar:masque': 300, 'avatar:joker': 400, 'avatar:oeil': 400, 'avatar:diamant': 450, 'avatar:couronne': 600, 'avatar:dragon': 700,
 }
 export function avatarOf(id: unknown): { emoji: string; special: boolean; key: string } | null {
   if (typeof id !== 'string') return null
@@ -160,7 +185,7 @@ export const DAILY_POOL = [
   { id: 'd_bluff3', label: 'Réussir 3 bluffs jamais démasqués', stat: 'uncaught_bluffs', goal: 3, xp: 60 },
   { id: 'd_marks3', label: 'Faire 3 marquages justes', stat: 'correct_marks', goal: 3, xp: 60 },
   { id: 'd_ranked1', label: 'Jouer 1 partie classée', stat: 'ranked', goal: 1, xp: 50 },
-  { id: 'd_score200', label: 'Marquer 200 points en une partie', stat: 'best_score', goal: 200, xp: 70 },
+  { id: 'd_score150', label: 'Marquer 150 points en une partie', stat: 'best_score', goal: 150, xp: 70 },
   { id: 'd_lives8', label: 'Gagner en gardant 8 vies ou plus', stat: 'best_lives', goal: 8, xp: 90 },
 ]
 /** UTC day, e.g. "2026-11-06": everyone gets the same 3 daily quests. */

@@ -3,14 +3,14 @@ import type { FormEvent } from 'react'
 import { call, getToken, saveToken, socket } from './net.ts'
 import { Game } from './Game.tsx'
 import type { GameView } from './Game.tsx'
-import { Avatar, Board, PieceIcon, reducedMotion } from './Board.tsx'
+import { Avatar, Board, PieceIcon, reducedMotion, RankBadge } from './Board.tsx'
 import type { BoardPiece, Skins } from './Board.tsx'
 import { Tutorial } from './Tutorial.tsx'
 import { Replay } from './Replay.tsx'
 import { defaultLang, getLang, setLang } from './i18n.ts'
 import type { Lang } from './i18n.ts'
 import { ForgotPassword, Friends, InviteToast, LiveGames, NotifySetting, Privacy, ResetPassword, Spectate, useFriendRequests } from './Social.tsx'
-import { avatarOf, layoutError, levelOf, placementLayout, randomSetup, AVATARS_BASE, AVATARS_SPECIAL, BOARD_SKINS, DEFAULT_LAYOUT, KINDS, NAMES, PIECE_SKINS, QUESTS, TIME_CONTROLS } from '../shared/rules.ts'
+import { avatarOf, layoutError, levelOf, rankOf, PLACEMENT_GAMES, RANKS, SEASON_RANK_REWARDS, SHOP, placementLayout, randomSetup, AVATARS_BASE, AVATARS_SPECIAL, BOARD_SKINS, DEFAULT_LAYOUT, KINDS, NAMES, PIECE_SKINS, QUESTS, TIME_CONTROLS } from '../shared/rules.ts'
 import type { Kind, Sq } from '../shared/rules.ts'
 
 type Profile = {
@@ -19,6 +19,7 @@ type Profile = {
   daily: { quests: { id: string; label: string; goal: number; progress: number; done: boolean; xp: number }[]; resetAt: number }
   season: { label: string; start: number; end: number }
   awards: { season: string; rank: number; label: string }[]
+  seasonRanks: { season: string; rank: string; label: string }[]; gold: number; seasonPoints: number
 }
 type Online = { players: number; visitors: number }
 type Settings = { theme: string; hints: boolean; sound: boolean; lang: Lang }
@@ -322,7 +323,8 @@ function Home({ me, online, view, skins }: { me: Profile | null; online: Online;
           </div>
           <progress max={xpNext - xpPrev} value={st.xp - xpPrev} aria-label="Progression vers le niveau suivant" />
           <div className="stats">
-            <div><b>{me.elo}</b>Elo</div>
+            <div><b>{rankOf(me.elo).label}</b>{me.elo} Elo</div>
+            <div><b>{me.seasonPoints}</b>pts de saison</div>
             <div><b>{st.games}</b>parties</div>
             <div><b>{st.wins}</b>victoires</div>
             <div><b>{st.uncaught_bluffs}</b>bluffs réussis</div>
@@ -438,7 +440,8 @@ function Play({ me, view }: { me: Profile | null; view: GameView | null }) {
   )
 }
 
-const BOARD_TABS: Record<string, string> = { elo: 'Elo', season: 'Saison', week: 'Semaine', wins: 'Victoires', bluff: 'Bluffeurs', detect: 'Détecteurs' }
+const RANKS_LABEL = Object.fromEntries(RANKS.map((r) => [r.key, r.label]))
+const BOARD_TABS: Record<string, string> = { elo: 'Rang', season: 'Saison', week: 'Semaine', wins: 'Victoires', bluff: 'Bluffeurs', detect: 'Détecteurs' }
 function Leaderboards({ me }: { me: Profile | null }) {
   const [kind, setKind] = useState('elo')
   const [rows, setRows] = useState<{ name: string; avatar: string | null; value: number }[] | null>(null)
@@ -450,7 +453,8 @@ function Leaderboards({ me }: { me: Profile | null }) {
     <main className="page">
       <h1>Classements</h1>
       {kind === 'season' && me && <p className="muted season">🏆 {me.season.label} · se termine dans {Math.max(1, Math.ceil((me.season.end - Date.now()) / 86_400_000))} jour(s)</p>}
-      {kind === 'season' && !me && <p className="muted season">🏆 Score cumulé ce mois-ci : le compteur repart à zéro le 1er du mois.</p>}
+      {kind === 'season' && !me && <p className="muted season">🏆 Points des parties classées ce mois-ci : le compteur repart à zéro le 1er du mois.</p>}
+      {(kind === 'season' || kind === 'week') && <p className="muted">Victoire classée +10 (+2 par victoire d’affilée, jusqu’à +10), défaite −4. Plus de 3 parties par jour contre le même joueur ne comptent pas.</p>}
       <div className="row tabs segmented" role="tablist">
         {Object.entries(BOARD_TABS).map(([k, l]) => <button key={k} role="tab" aria-selected={k === kind} className={k === kind ? 'on' : ''} onClick={() => setKind(k)}>{l}</button>)}
       </div>
@@ -460,6 +464,7 @@ function Leaderboards({ me }: { me: Profile | null }) {
             <span className="rank-n">{['🥇', '🥈', '🥉'][i] ?? i + 1}</span>
             <Avatar id={r.avatar} name={r.name} size={30} />
             <span className="rank-name">{r.name}</span>
+            {kind === 'elo' && <RankBadge elo={r.value} />}
             <b>{r.value}</b>
           </li>
         ))}
@@ -474,6 +479,10 @@ function AvatarPicker({ me, setMe }: { me: Profile; setMe: (p: Profile) => void 
   const [err, setErr] = useState('')
   const pick = (avatar: string) => call<Profile>('avatar', { avatar }).then(setMe).catch((e: Error) => setErr(e.message))
   const quest = (key: string) => QUESTS.find((q) => q.reward === `avatar:${key}`)
+  const lockText = (key: string) => {
+    const rank = SEASON_RANK_REWARDS.find((r) => r.reward === `avatar:${key}`)?.rank
+    return quest(key)?.label ?? (rank ? `Atteindre ${RANKS_LABEL[rank]} pendant une saison` : 'Finir dans le top 3 d’une saison')
+  }
   const current = avatarOf(me.avatar)
   return (
     <section className="card">
@@ -503,13 +512,38 @@ function AvatarPicker({ me, setMe }: { me: Profile; setMe: (p: Profile) => void 
               aria-label={`${a.label}${open ? '' : ' (verrouillée)'}`} aria-pressed={me.avatar === id}>
               <Avatar id={id} name={me.name} size={52} />
               <b>{a.label}</b>
-              {!open && <small>🔒 {quest(key)?.label ?? 'Finir dans le top 3 d’une saison'}</small>}
+              {!open && <small>🔒 {lockText(key)}</small>}
             </button>
           )
         })}
       </div>
+      <BuyRow me={me} setMe={setMe} items={Object.keys(AVATARS_SPECIAL).map((k) => `avatar:${k}`)} />
       {err && <p className="warn">{err}</p>}
     </section>
+  )
+}
+
+/** Locked quest rewards that can be bought with gold instead. */
+function BuyRow({ me, setMe, items }: { me: Profile; setMe: (p: Profile) => void; items: string[] }) {
+  const [err, setErr] = useState('')
+  const forSale = items.filter((i) => SHOP[i] && !me.unlocked.includes(i))
+  if (!forSale.length) return null
+  const label = (i: string) => {
+    const [type, key] = i.split(':')
+    return type === 'avatar' ? AVATARS_SPECIAL[key].label : type === 'board' ? BOARD_SKINS[key] : PIECE_SKINS[key]
+  }
+  return (
+    <div className="shop">
+      <p className="muted">{`Pas envie d’attendre ? Achète avec ton or (${me.gold} 🪙, gagné en jouant : 1 pour 10 points de score).`}</p>
+      <div className="row">
+        {forSale.map((i) => (
+          <button key={i} disabled={me.gold < SHOP[i]} onClick={() => { setErr(''); call<Profile>('shop:buy', { item: i }).then(setMe).catch((e: Error) => setErr(e.message)) }}>
+            {`${label(i)} · ${SHOP[i]} 🪙`}
+          </button>
+        ))}
+      </div>
+      {err && <p className="warn">{err}</p>}
+    </div>
   )
 }
 
@@ -589,6 +623,7 @@ function Customize({ me, setMe }: { me: Profile | null; setMe: (p: Profile) => v
       <div className="skins">{Object.entries(PIECE_SKINS).map(([k, l]) => tile('pieces', k, l))}</div>
       <h2>Plateau</h2>
       <div className="skins">{Object.entries(BOARD_SKINS).map(([k, l]) => tile('board', k, l))}</div>
+      <BuyRow me={me} setMe={setMe} items={[...Object.keys(PIECE_SKINS).map((k) => `pieces:${k}`), ...Object.keys(BOARD_SKINS).map((k) => `board:${k}`)]} />
       {err && <p className="warn">{err}</p>}
       <h2>Quêtes du jour</h2>
       <div className="card"><DailyQuests daily={me.daily} /></div>
@@ -735,7 +770,8 @@ function Account({ me, setMe, googleClientId, mail }: { me: Profile | null; setM
           <Avatar id={me.avatar} name={me.name} size={56} />
           <div>
             <h1>{me.name}</h1>
-            <p className="muted">Niveau {levelOf(st.xp)} · {st.xp} XP · Elo {me.elo}</p>
+            <p className="muted">Niveau {levelOf(st.xp)} · {st.xp} XP · <RankBadge elo={me.elo} /> {me.elo} Elo · {me.gold} 🪙</p>
+            {st.ranked < PLACEMENT_GAMES && <p className="muted">{`Placement : ${st.ranked}/${PLACEMENT_GAMES} parties classées (l’Elo bouge plus vite).`}</p>}
           </div>
         </div>
         <progress max={xpNext - xpPrev} value={st.xp - xpPrev} aria-label="Progression vers le niveau suivant" />
@@ -747,9 +783,10 @@ function Account({ me, setMe, googleClientId, mail }: { me: Profile | null; setM
           <div><b>{st.uncaught_bluffs}</b>bluffs réussis</div>
           <div><b>{st.correct_marks}</b>marquages justes</div>
         </div>
-        {!!me.awards.length && (
+        {!!(me.awards.length + me.seasonRanks.length) && (
           <div className="awards">
             {me.awards.map((a) => <span key={a.season} className="award">{['', '🥇', '🥈', '🥉'][a.rank]} {a.label}</span>)}
+            {me.seasonRanks.map((a) => <span key={`r${a.season}`} className="award">{`${a.label} · ${RANKS_LABEL[a.rank]}`}</span>)}
           </div>
         )}
       </section>
